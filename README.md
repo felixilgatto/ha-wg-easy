@@ -25,7 +25,7 @@ Ingress design notes are in [`wg-easy/DOCS.md`](wg-easy/DOCS.md).
 
 | Add-on | Version | Description |
 | --- | --- | --- |
-| [wg-easy](wg-easy) | 15.4.0 | WireGuard VPN + WG-Easy web UI as an Ingress panel |
+| [wg-easy](wg-easy) | 15.4.1 | WireGuard VPN + WG-Easy web UI as an Ingress panel |
 
 ## Design notes (short version)
 
@@ -38,12 +38,33 @@ exposing a LAN port, the add-on runs WG-Easy under a **fixed internal base**
 fixed base and the dynamic Ingress prefix on every request and response. See
 [`wg-easy/DOCS.md`](wg-easy/DOCS.md).
 
+## LAN access on Home Assistant OS (the `15.4.1` fix)
+
+Home Assistant OS's kernel does **not** expose the *legacy* netfilter `nat`
+table to add-ons, so `wg-quick`'s NAT rules failed there:
+
+```
+iptables v1.8.13 (legacy): can't initialize iptables table `nat': Table does not exist
+modprobe: FATAL: Module ip_tables not found in directory /lib/modules/6.18.39-haos-raspi
+```
+
+`15.4.1` points the generic `iptables`/`ip6tables` commands at the **nftables**
+backend (`xtables-nft-multi`), which HAOS *does* provide. This is the same
+technique the official HAOS WireGuard add-on uses
+([`hassio-addons/addon-wireguard`](https://github.com/hassio-addons/addon-wireguard),
+`wireguard/Dockerfile`). `SYS_MODULE` was dropped as dead weight (there is no
+netfilter module to load).
+
 ## What was verified locally
 
 Built and run on an x86_64 host with Docker:
 
 - image builds from the pinned `ghcr.io/wg-easy/wg-easy:15.4.0`;
-- `wg0` comes up inside the container (`wg show`);
+- inside the built image `iptables --version` / `ip6tables --version` report the
+  **`nf_tables`** backend and the `MASQUERADE` / `FORWARD` rules install;
+- the full launcher runs: `wg0` comes up inside the container (`wg show`,
+  `wg-quick up wg0` → *"Wireguard Interface wg0 started successfully"*) and the
+  `POSTROUTING ... MASQUERADE` rule is present;
 - the web UI loads through a proxy that mimics Home Assistant Ingress
   (request forwarded with a stripped `/api/hassio_ingress/<token>/` prefix and an
   `X-Ingress-Path` header) — assets, login and the SPA work;
@@ -54,7 +75,22 @@ Built and run on an x86_64 host with Docker:
   client able to ping both the tunnel address and a host on the LAN behind the
   server.
 
-Raw output is in the task report that accompanied this repository.
+### What is NOT verified here (the real proof is the Pi)
+
+The local host kernel exposes **both** the legacy and the nft netfilter `nat`
+tables, so it cannot reproduce the HAOS-only failure. The fix is proven correct
+by reasoning + the official add-on's precedent + the local backend switch — but
+**the end-to-end proof is the owner's Home Assistant OS device**. On the Pi,
+after updating to `15.4.1`, the add-on log must show:
+
+- **no** `modprobe: FATAL: Module ip_tables not found` and **no**
+  `can't initialize iptables table 'nat'`;
+- `wg-quick up wg0` completing **without** the
+  `Error: Command failed: wg-quick up wg0 (code 3)` rollback;
+- the WireGuard peer then able to ping a device on the home LAN.
+
+Raw output of the local verification is in the task report that accompanied this
+repository.
 
 ## License
 

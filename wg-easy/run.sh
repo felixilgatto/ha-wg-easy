@@ -53,9 +53,10 @@ export HOST="127.0.0.1"
 export INSECURE=true
 # Fixed internal base path; the proxy rewrites it to the dynamic ingress path.
 export NUXT_APP_BASE_URL="$APP_BASE"
-# Default: no IPv6 in the tunnel. Many kernels (including some Home Assistant OS
-# builds and this test host) lack the ip6_tables nat table, which would make
-# `wg-quick up` fail. IPv4 is enough to reach a home LAN.
+# Default: no IPv6 in the tunnel. The add-on now runs iptables on the nftables
+# backend (see Dockerfile), which HAOS's kernel does provide, so IPv6 *can* be
+# enabled; it stays off by default because IPv4 is enough to reach a home LAN
+# and this keeps the first-run config minimal. Set disable_ipv6: false to enable.
 export DISABLE_IPV6="$DISABLE_IPV6_OPT"
 
 # INIT_* variables are consumed by wg-easy only on the very first start, when

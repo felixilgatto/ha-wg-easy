@@ -20,7 +20,7 @@ packaged as a Home Assistant OS add-on.
 | `allowed_ips` | What clients route through the tunnel. `0.0.0.0/0, ::/0` = full tunnel (reach the whole LAN **and** the internet through your home). Set your LAN CIDR (e.g. `192.168.1.0/24`) for split tunnel. |
 | `ipv4_cidr` | VPN-internal IPv4 subnet for clients. Default `10.8.0.0/24`. |
 | `ipv6_cidr` | VPN-internal IPv6 subnet for clients. |
-| `disable_ipv6` | Disable IPv6 inside the tunnel. Default `true` (recommended: some kernels lack the `ip6_tables` NAT table, which would make `wg-quick` fail). |
+| `disable_ipv6` | Disable IPv6 inside the tunnel. Default `true`. IPv4 is enough to reach a home LAN; set to `false` to enable IPv6 (the add-on runs iptables on the nftables backend, which HAOS supports). |
 | `reset_admin_password` | When `true`, reset the web UI admin password from the `password` option on next start. |
 
 See [DOCS.md](DOCS.md) for the full documentation, including the

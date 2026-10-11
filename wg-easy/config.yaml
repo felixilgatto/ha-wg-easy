@@ -1,5 +1,5 @@
 name: "WG-Easy VPN"
-version: "15.4.0"
+version: "15.4.1"
 slug: "wg-easy"
 description: >-
   WireGuard VPN server with the WG-Easy web interface. The web UI is exposed
@@ -24,10 +24,12 @@ panel_icon: "mdi:vpn"
 panel_title: "WG-Easy"
 panel_admin: false
 
-# WireGuard needs to create its interface and (optionally) load kernel modules.
+# WireGuard only needs to create its interface and manage the nftables rules.
+# SYS_MODULE is intentionally NOT requested: Home Assistant OS's kernel does not
+# ship the netfilter modules as loadable files (`modprobe: FATAL: Module
+# ip_tables not found`), so nothing here can or should load a kernel module.
 privileged:
   - NET_ADMIN
-  - SYS_MODULE
 
 options:
   host: ""

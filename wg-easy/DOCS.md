@@ -47,6 +47,15 @@ exposed on a host port.
   as with the official WireGuard add-on.
 - The WireGuard UDP port (`port` option, default `51820`) is opened on the host.
   This is the port you forward on your router.
+- The add-on runs `iptables`/`ip6tables` on the **nftables** backend
+  (`xtables-nft-multi`). Home Assistant OS's kernel does not expose the *legacy*
+  netfilter `nat` table to add-ons, which made the NAT rules that `wg-quick`
+  installs fail (`can't initialize iptables table 'nat'` / `modprobe: FATAL:
+  Module ip_tables not found`). The nftables backend is the one HAOS provides.
+  This mirrors the official HAOS WireGuard add-on
+  ([`hassio-addons/addon-wireguard`](https://github.com/hassio-addons/addon-wireguard)).
+- Only `NET_ADMIN` is requested. `SYS_MODULE` is not: HAOS ships no loadable
+  netfilter modules, so loading a module is impossible and unnecessary.
 
 ## Options and the "first run only" caveat
 
@@ -61,9 +70,9 @@ Consequently:
   `password`, `dns`, `allowed_ips`, `ipv4_cidr`, `ipv6_cidr`.
 - `disable_ipv6` (default `true`) is read on **every** start and simply enables
   or disables IPv6 in the generated WireGuard config. It is left `true` by
-  default because some kernels (including the verification host) lack the
-  `ip6_tables` NAT table, which makes `wg-quick up` fail otherwise. IPv4 is
-  enough to reach a home LAN.
+  default because IPv4 is enough to reach a home LAN and it keeps the first-run
+  config minimal. The add-on runs iptables on the nftables backend, which HAOS
+  supports, so setting `disable_ipv6: false` is possible too.
 - On **later starts**, the stored configuration is kept. To change `host`,
   `port`, `dns` or `allowed_ips` afterwards, edit them in the WG-Easy web UI
   (Settings). Changing the add-on options for these fields will have no effect.
@@ -100,9 +109,17 @@ use a dynamic-DNS hostname and put it in the `host` option.
 
 ## Verified
 
-The container image was built and run on an x86_64 host: the WireGuard
-interface came up, the web UI answered through an Ingress-style prefixed proxy
-(and refused requests without the Ingress header), a client was created, and a
-real WireGuard handshake with a second container was observed, with the client
-able to reach a host on the LAN behind the server. See the repository README for
-the raw evidence.
+The container image was built and run on an x86_64 host: `iptables`/`ip6tables`
+report the `nf_tables` backend, the WireGuard interface came up
+(`wg-quick up wg0` → *"Wireguard Interface wg0 started successfully"*) with the
+`POSTROUTING ... MASQUERADE` rule installed, the web UI answered through an
+Ingress-style prefixed proxy (and refused requests without the Ingress header), a
+client was created, and a real WireGuard handshake with a second container was
+observed, with the client able to reach a host on the LAN behind the server. See
+the repository README for the raw evidence.
+
+> **The Home Assistant OS proof is the owner's device.** The local host kernel
+> exposes both netfilter backends, so it cannot reproduce the HAOS-only failure
+> this release fixes. After updating, the add-on log on HAOS must show no
+> `Module ip_tables not found` / `can't initialize iptables table 'nat'` error
+> and a successful `wg-quick up wg0`.
