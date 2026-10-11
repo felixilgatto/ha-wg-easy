@@ -1,0 +1,55 @@
+name: "WG-Easy VPN"
+version: "15.4.0"
+slug: "wg-easy"
+description: >-
+  WireGuard VPN server with the WG-Easy web interface. The web UI is exposed
+  as a Home Assistant sidebar panel through Ingress (no extra LAN port). VPN
+  clients can reach your whole home LAN. The WireGuard UDP port is configurable.
+url: "https://github.com/felixilgatto/ha-wg-easy/tree/main/wg-easy"
+arch:
+  - aarch64
+  - amd64
+init: false
+startup: services
+boot: auto
+
+# The tunnel interface and LAN routing must behave exactly like on the host.
+host_network: true
+
+# Web interface is served as a sidebar panel via Home Assistant Ingress.
+# No host port is published for the web UI; the proxy listens on ingress_port.
+ingress: true
+ingress_port: 8099
+ingress_stream: true
+panel_icon: "mdi:vpn"
+panel_title: "WG-Easy"
+panel_admin: false
+
+# WireGuard needs to create its interface and (optionally) load kernel modules.
+privileged:
+  - NET_ADMIN
+  - SYS_MODULE
+
+options:
+  host: ""
+  port: 51820
+  username: "admin"
+  password: ""
+  dns: "1.1.1.1"
+  allowed_ips: "0.0.0.0/0, ::/0"
+  ipv4_cidr: "10.8.0.0/24"
+  ipv6_cidr: "fdcc:ad94:bacf:61a4::/64"
+  disable_ipv6: true
+  reset_admin_password: false
+
+schema:
+  host: str
+  port: port
+  username: str
+  password: password
+  dns: str
+  allowed_ips: str
+  ipv4_cidr: str
+  ipv6_cidr: str
+  disable_ipv6: bool
+  reset_admin_password: bool

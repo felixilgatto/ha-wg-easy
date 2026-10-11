@@ -1,0 +1,2 @@
+name: "WG-Easy VPN"
+description: "WireGuard VPN server with the WG-Easy web interface, exposed as a Home Assistant sidebar panel via Ingress. VPN clients can reach your whole home LAN."
