@@ -1,10 +1,12 @@
 name: "WG-Easy VPN"
-version: "15.4.3"
+version: "15.4.4"
 slug: "wg-easy"
 description: >-
   WireGuard VPN server with the WG-Easy web interface. The web UI is exposed
-  as a Home Assistant sidebar panel through Ingress (no extra LAN port). VPN
-  clients can reach your whole home LAN. The WireGuard UDP port is configurable.
+  as a Home Assistant sidebar panel through Ingress (no extra LAN port). By
+  default a VPN client can reach only this Home Assistant host; add your LAN
+  subnet to the allowed_ips option to reach the rest of the home LAN. The
+  WireGuard UDP port is configurable.
 url: "https://github.com/felixilgatto/ha-wg-easy/tree/main/wg-easy"
 arch:
   - aarch64
@@ -37,7 +39,12 @@ options:
   username: "admin"
   password: ""
   dns: "1.1.1.1"
-  allowed_ips: "0.0.0.0/0, ::/0"
+  # Default AllowedIPs handed to NEW clients. Restricted on purpose: the tunnel
+  # subnet only. The add-on always adds THIS Home Assistant host's LAN address
+  # (<host-ip>/32, derived at runtime) so Home Assistant stays reachable without
+  # the user typing their own address. To let clients reach the whole LAN, add
+  # the LAN subnet here (e.g. "10.8.0.0/24, 192.168.0.0/24").
+  allowed_ips: "10.8.0.0/24"
   ipv4_cidr: "10.8.0.0/24"
   ipv6_cidr: "fdcc:ad94:bacf:61a4::/64"
   disable_ipv6: true

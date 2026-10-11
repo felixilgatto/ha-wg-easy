@@ -1,2 +1,13 @@
 name: "WG-Easy VPN"
-description: "WireGuard VPN server with the WG-Easy web interface, exposed as a Home Assistant sidebar panel via Ingress. VPN clients can reach your whole home LAN."
+description: "WireGuard VPN server with the WG-Easy web interface, exposed as a Home Assistant sidebar panel via Ingress. By default VPN clients reach only this Home Assistant host; add your LAN subnet to allowed_ips to reach the whole home LAN."
+configuration:
+  allowed_ips:
+    name: "Allowed IPs (default for new clients)"
+    description: >-
+      The default AllowedIPs given to NEW VPN clients — what a client is allowed
+      to route into the tunnel, and therefore which machines it can reach. The
+      tunnel subnet only (default) means a client reaches this Home Assistant
+      host and nothing else on the LAN. Add your LAN subnet (e.g. 192.168.0.0/24)
+      to let clients reach every machine on your home LAN. This Home Assistant
+      host's own LAN address is always added automatically. Existing clients keep
+      their own stored value; to change one, edit it in the web UI or recreate it.

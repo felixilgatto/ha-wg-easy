@@ -153,6 +153,42 @@ WG-Easy database **before WG-Easy starts**, every start:
 Nothing in the web UI needs changing, and a reinstall cannot reintroduce the
 defect.
 
+## LAN access: what clients are allowed to route (`allowed_ips`)
+
+Which machines on your home LAN a VPN client can reach is decided by the
+client's own **AllowedIPs** — the set of destinations the client routes into the
+tunnel. In WG-Easy that value comes from the *default* AllowedIPs
+(`user_configs_table.default_allowed_ips`), which is copied into a client when
+the client is created. The add-on's existing `allowed_ips` option sets that
+default — it is the single knob for LAN access.
+
+- **Default (`allowed_ips: "10.8.0.0/24"`):** a new client may route only the
+  tunnel subnet, so it can reach **this Home Assistant host and nothing else** on
+  your LAN. The add-on **always adds this host's own LAN address**
+  (`<host-ip>/32`, derived at runtime from the detected LAN device) to the
+  effective value, so Home Assistant is reachable without you having to type your
+  own address.
+- **Open the LAN (`allowed_ips: "10.8.0.0/24, 192.168.0.0/24"`):** add your LAN
+  subnet to the same option. New clients may then route the whole LAN and can
+  reach every machine on it (cameras, NAS, the Proxmox web UI, ...). The add-on
+  logs a **startup WARNING** whenever the effective AllowedIPs go beyond the
+  tunnel subnet and this Home Assistant host, so opening the LAN is never silent.
+
+The add-on writes the effective default into WG-Easy's database **before WG-Easy
+starts, on every start** — the same moment and mechanism it uses to fix the
+masquerade device below. The option, not the web UI, owns this default.
+
+> **Existing clients are not changed.** This value is only the *default applied
+> when a client is created*; clients that already exist keep their own stored
+> AllowedIPs. Changing `allowed_ips` therefore affects clients created
+> afterwards. To narrow or widen an existing client, edit it in the WG-Easy web
+> UI or delete and recreate it.
+
+This is separate from the server-side masquerade: the MASQUERADE rule and IPv4
+forwarding are always installed on the real interface (see below), whatever
+`allowed_ips` is. The barrier that decides which LAN machines a client can reach
+is the client's AllowedIPs, not the masquerade.
+
 ## Options and the "first run only" caveat
 
 WG-Easy 15.x stores its configuration (host, port, DNS, allowed IPs, clients,
@@ -163,15 +199,19 @@ does not yet exist** (the very first start).
 Consequently:
 
 - On the **first start**, all options are applied: `host`, `port`, `username`,
-  `password`, `dns`, `allowed_ips`, `ipv4_cidr`, `ipv6_cidr`.
+  `password`, `dns`, `ipv4_cidr`, `ipv6_cidr`.
+- `allowed_ips` (the default AllowedIPs for new clients) is applied on **every**
+  start: the launcher writes the effective value into WG-Easy's database before
+  startup (see *LAN access* above). Changing the option takes effect for new
+  clients on the next restart, and never changes clients that already exist.
 - `disable_ipv6` (default `true`) is read on **every** start and simply enables
   or disables IPv6 in the generated WireGuard config. It is left `true` by
   default because IPv4 is enough to reach a home LAN and it keeps the first-run
   config minimal. The add-on runs iptables on the nftables backend, which HAOS
   supports, so setting `disable_ipv6: false` is possible too.
-- On **later starts**, the stored configuration is kept. To change `host`,
-  `port`, `dns` or `allowed_ips` afterwards, edit them in the WG-Easy web UI
-  (Settings). Changing the add-on options for these fields will have no effect.
+- On **later starts**, the stored `host`, `port`, `dns` and CIDRs are kept. To
+  change them afterwards, edit them in the WG-Easy web UI (Settings). Changing
+  the add-on options for these fields will have no effect.
 - The admin **password** can be re-applied from the option by setting
   `reset_admin_password: true` once (it is reset on the next start, then set it
   back to `false`). This also clears 2FA.
@@ -245,6 +285,30 @@ does on HAOS) against both an empty `/etc/wireguard` and an existing database:
   could not determine the LAN device` message and continued, leaving WG-Easy's
   stored device (`eth0`) in place.
 
+For `15.4.4` the same built image was run on x86_64 Docker (`--network host`)
+and driven through the WG-Easy HTTP API (`POST /api/auth/password` then
+`POST /api/client`) to create a real client, for the default `allowed_ips` and
+for an opened LAN:
+
+- with the default `allowed_ips: "10.8.0.0/24"` the launcher derived this host's
+  address from the LAN device (`ens18` → `192.168.0.36`) and set
+  `user_configs_table.default_allowed_ips = ["10.8.0.0/24","192.168.0.36/32"]`;
+  the client then generated `AllowedIPs = 10.8.0.0/24, 192.168.0.36/32`, and the
+  log printed `allowed_ips is restricted: new VPN clients reach this Home
+  Assistant host ... only` — no warning;
+- with `allowed_ips: "10.8.0.0/24, 192.168.0.0/24"` the default became
+  `["10.8.0.0/24","192.168.0.0/24","192.168.0.36/32"]`, the client generated
+  `AllowedIPs = 10.8.0.0/24, 192.168.0.0/24, 192.168.0.36/32`, and the launcher
+  printed the `WARNING: VPN clients can reach MORE than this Home Assistant host`
+  block naming the extra range `192.168.0.0/24`;
+- on a **restart** with the existing database the launcher logged
+  `Existing database found: keeping stored WG-Easy configuration`, rewrote the
+  same default and did not re-run first-run setup — idempotent;
+- in every case the generated `wg0.conf` kept
+  `PostUp = iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o ens18 -j
+  MASQUERADE`, i.e. the masquerade stays aligned with the real interface whatever
+  `allowed_ips` is.
+
 > **The Home Assistant OS proof is the owner's device.** The local host kernel
 > exposes both netfilter backends, its `/proc/sys` is writable on the host, and
 > its LAN device name (`ens18`) is not the Pi's (`end0`), so the local host
@@ -258,4 +322,7 @@ does on HAOS) against both an empty `/etc/wireguard` and an existing database:
 > - `[add-on] LAN device (default route) = end0` and
 >   `WG-Easy masquerade device set to 'end0' before startup`;
 > - a `---- network state ----` block whose MASQUERADE `-o` device matches the
->   `LAN device (default route)`, with the `OK:` line (no `NOTE` line).
+>   `LAN device (default route)`, with the `OK:` line (no `NOTE` line);
+> - `[add-on] Default AllowedIPs for new clients set to: 10.8.0.0/24, <host-ip>/32`
+>   followed by the `allowed_ips is restricted:` line — or the LAN `WARNING:`
+>   block if you added your subnet to `allowed_ips`.

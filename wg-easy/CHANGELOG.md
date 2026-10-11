@@ -1,5 +1,78 @@
 # Changelog
 
+## 15.4.4
+
+- **LAN access is now opt-in: by default a VPN client reaches only this Home
+  Assistant host, not the rest of the LAN.** Which machines a client can reach
+  is decided by the client's own **AllowedIPs** (what it routes into the tunnel),
+  and WG-Easy copies a *default* AllowedIPs into every client it creates. That
+  default was `["0.0.0.0/0","::/0"]`, i.e. every client could reach the whole LAN
+  (cameras, NAS, the Proxmox web UI, ...). The default of the existing
+  `allowed_ips` option is now the tunnel subnet only:
+
+  ```yaml
+  allowed_ips: "10.8.0.0/24"   # was: "0.0.0.0/0, ::/0"
+  ```
+
+  No new option was added — `allowed_ips` is the single knob. Because the owner's
+  own LAN address is not known when the add-on is written, the launcher **derives
+  this Home Assistant host's LAN address** from the LAN device it already detects
+  (the default-route device) and **always includes `<host-ip>/32`** in the
+  effective default, so Home Assistant stays reachable out of the box without the
+  user typing their own address. With the default option a new client's generated
+  config is e.g. `AllowedIPs = 10.8.0.0/24, 192.168.0.15/32` — Home Assistant and
+  nothing else on the LAN.
+
+- **Opening the LAN uses the same option.** To let clients reach the whole LAN,
+  add your subnet to `allowed_ips`, e.g.
+  `allowed_ips: "10.8.0.0/24, 192.168.0.0/24"`. The launcher then includes that
+  subnet in the effective default.
+
+- **A visible startup `WARNING` fires whenever the LAN is reachable**, i.e.
+  whenever the effective AllowedIPs contain anything beyond the tunnel subnet and
+  this Home Assistant host. It names the extra ranges and states that clients can
+  then reach every machine on the LAN. Nothing silent. When the default is in
+  effect the log instead prints `allowed_ips is restricted: ...`.
+
+- The effective default is written into WG-Easy's database
+  (`user_configs_table.default_allowed_ips`) **before WG-Easy starts, on every
+  start** — the same moment and mechanism the launcher already uses for the
+  masquerade device (`fix-lan-device.mjs`). On a fresh install `INIT_ALLOWED_IPS`
+  is set to the same value so the first-run seed and the stored default cannot
+  disagree.
+
+- **Existing clients are unaffected.** The value is only the *default applied when
+  a client is created*; clients that already exist keep their own stored
+  AllowedIPs. To narrow or widen an existing client, edit it in the WG-Easy web UI
+  or delete and recreate it (documented in DOCS.md). Note this also means the
+  add-on owns the default: it is re-applied on every start, so change
+  `allowed_ips`, not the web-UI default, to change it.
+
+- **The server-side masquerade is unchanged and stays aligned to the real
+  interface** (the `15.4.3` fix is untouched): forwarding and the MASQUERADE rule
+  are always installed on the detected LAN device, whatever `allowed_ips` is — the
+  barrier that decides which LAN machines a client can reach is the client's
+  AllowedIPs, not the masquerade. Interface detection, the nftables backend switch
+  (`15.4.1`) and the IPv4-forwarding handling (`15.4.2`) are unchanged, as are
+  Ingress-only UI, no published LAN port, the configurable UDP port, the pinned
+  image tag, `/etc/wireguard` persistence and first-run semantics. Still embeds
+  WG-Easy `15.4.0` (`ghcr.io/wg-easy/wg-easy:15.4.0`).
+
+> Verified locally on x86_64 Docker (not Home Assistant OS), with `--network
+> host` so the container sees the host's default-route device as the add-on does
+> on HAOS, driving the WG-Easy HTTP API to create a real client: with the default
+> `allowed_ips` the launcher logged `Default AllowedIPs for new clients set to:
+> 10.8.0.0/24, 192.168.0.36/32`, set
+> `default_allowed_ips = ["10.8.0.0/24","192.168.0.36/32"]` and the created
+> client generated `AllowedIPs = 10.8.0.0/24, 192.168.0.36/32` with no warning;
+> with `allowed_ips: "10.8.0.0/24, 192.168.0.0/24"` the default gained
+> `192.168.0.0/24`, the client generated it, and the launcher printed the LAN
+> `WARNING:` block naming `192.168.0.0/24`; a restart with the existing database
+> kept the same values and did not re-run first-run setup; and in every case the
+> generated `wg0.conf` kept `-o ens18 -j MASQUERADE` (the real device). **The Home
+> Assistant OS proof — and the Pi's real interface name (`end0`) — cannot be
+> reproduced here**; see DOCS.md.
+
 ## 15.4.3
 
 - **Fix: VPN clients can now reach other machines on the home LAN, not just the

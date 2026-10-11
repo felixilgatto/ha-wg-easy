@@ -19,17 +19,31 @@ get_default() {
     # option with fallback
     jq -r --arg k "$1" --arg d "$2" 'if (.[$k] // "") == "" then $d else .[$k] end' "$OPTIONS"
 }
+trim() {
+    # strip leading/trailing whitespace
+    printf '%s' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
+}
 
 WG_HOST="$(get host)"
 WG_PORT="$(get_default port 51820)"
 WG_USERNAME="$(get_default username admin)"
 WG_PASSWORD="$(get password)"
 WG_DNS="$(get_default dns 1.1.1.1)"
-WG_ALLOWED_IPS="$(get_default allowed_ips 0.0.0.0/0, ::/0)"
+WG_ALLOWED_IPS="$(get_default allowed_ips 10.8.0.0/24)"
 WG_IPV4_CIDR="$(get_default ipv4_cidr 10.8.0.0/24)"
 WG_IPV6_CIDR="$(get_default ipv6_cidr fdcc:ad94:bacf:61a4::/64)"
 DISABLE_IPV6_OPT="$(jq -r '.disable_ipv6 // true' "$OPTIONS")"
 RESET_ADMIN_PW="$(jq -r '.reset_admin_password // false' "$OPTIONS")"
+
+# Effective default allowed IPs handed to NEW clients: the `allowed_ips` option
+# plus this Home Assistant host's LAN address. Set by derive_allowed_ips(); also
+# fed to WG-Easy as INIT_ALLOWED_IPS on a fresh install so the first-run seed
+# matches what we write to the database.
+EFFECTIVE_ALLOWED_IPS=""
+# Entries in the effective set that go beyond the tunnel subnet and this Home
+# Assistant host, i.e. what makes other LAN machines reachable. Drives the
+# startup warning.
+EXTRA_ALLOWED_IPS=""
 
 WEB_PORT=51821
 INGRESS_PORT=8099
@@ -62,6 +76,12 @@ mkdir -p /etc/wireguard
 # containers, so if the value *is* 0 the write will fail with
 # "Read-only file system" - the effective value is logged either way. See
 # DOCS.md ("Reaching the rest of the LAN") for what to do in that case.
+#
+# NOTE: forwarding and the MASQUERADE rule are kept in place *always*, whatever
+# `allowed_ips` is. They are not the barrier that decides which LAN machines a
+# client can reach - that barrier is the client's own AllowedIPs. Leaving them
+# installed keeps the masquerade aligned with the real interface at all times
+# and avoids any dependence on a client-side setting.
 enable_ipv4_forwarding() {
     local before after
     before="$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null || echo '?')"
@@ -104,6 +124,7 @@ dump_network_state() {
     fi
     dev="$(ip -o route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1)}}')"
     echo "[add-on]   LAN device (default route) = ${dev:-unknown}"
+    echo "[add-on]   default AllowedIPs for new clients = ${EFFECTIVE_ALLOWED_IPS:-unknown}"
 
     nat="$(iptables -t nat -S POSTROUTING 2>&1)"
     masq_line="$(printf '%s\n' "$nat" | grep -F -- "-s ${WG_IPV4_CIDR} " | grep -i masquerade | head -n1)"
@@ -117,7 +138,7 @@ dump_network_state() {
             echo "[add-on]   unreachable (the Home Assistant host itself still works)."
         elif [ -n "$dev" ] && [ -n "$masq_dev" ]; then
             echo "[add-on]   OK: MASQUERADE '-o ${masq_dev}' matches the LAN device,"
-            echo "[add-on]   so VPN clients can reach other machines on the home LAN."
+            echo "[add-on]   so NAT is aligned with the real interface."
         fi
     else
         echo "[add-on]   NAT MASQUERADE: none for ${WG_IPV4_CIDR} - return traffic"
@@ -154,12 +175,77 @@ detect_lan_device() {
         | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }}'
 }
 
+# The global IPv4 address (with prefix) of the LAN device, e.g. 192.168.0.15/24.
+lan_device_address() {
+    ip -o -4 addr show dev "$1" scope global 2>/dev/null \
+        | awk '{for (i = 1; i <= NF; i++) if ($i == "inet") { print $(i + 1); exit }}' || true
+}
+
+# ---- derive the effective default allowed IPs for NEW clients -------------
+# `allowed_ips` is the single knob that controls what a newly created client is
+# allowed to route into the tunnel, and therefore which machines it can reach.
+# It is the *default* WG-Easy copies into a client's own AllowedIPs when the
+# client is created (it does not touch clients that already exist).
+#
+# The option's default is the tunnel subnet only, so a fresh install lets a
+# client reach this Home Assistant host and nothing else. But a client can only
+# reach the host if the host's LAN address is in its AllowedIPs, and the owner's
+# address is not known when the add-on is written - so the launcher derives this
+# host's LAN address from the detected LAN device and ALWAYS includes
+# <host-ip>/32 in the effective value. To open the LAN the user adds their
+# subnet to the same option (e.g. "10.8.0.0/24, 192.168.0.0/24"); no second
+# option is introduced.
+#
+# The result is written to WG-Easy's `user_configs_table.default_allowed_ips`
+# before WG-Easy starts. Anything in it beyond the tunnel subnet and this host
+# (i.e. that makes other LAN machines reachable) is collected in
+# EXTRA_ALLOWED_IPS for the startup warning.
+derive_allowed_ips() {
+    local dev="$1" host_cidr host_addr host_slash32
+    local result="$WG_ALLOWED_IPS"
+    local found_host=no p extra="" parts
+
+    if [ -n "$dev" ]; then
+        host_cidr="$(lan_device_address "$dev")"
+        host_addr="${host_cidr%%/*}"
+        if [ -n "$host_addr" ]; then
+            host_slash32="${host_addr}/32"
+        else
+            echo "[add-on] WARNING: could not determine the IPv4 address of '$dev';"
+            echo "[add-on] this Home Assistant host's LAN address will not be added to"
+            echo "[add-on] the clients' default AllowedIPs automatically."
+        fi
+    else
+        echo "[add-on] WARNING: could not determine the LAN device; this Home"
+        echo "[add-on] Assistant host's LAN address will not be added to the clients'"
+        echo "[add-on] default AllowedIPs automatically."
+    fi
+
+    IFS=',' read -ra parts <<< "$WG_ALLOWED_IPS"
+    for p in "${parts[@]}"; do
+        p="$(trim "$p")"
+        [ -z "$p" ] && continue
+        [ -n "${host_slash32:-}" ] && [ "$p" = "$host_slash32" ] && found_host=yes
+        [ "$p" = "$WG_IPV4_CIDR" ] && continue
+        [ -n "${host_slash32:-}" ] && [ "$p" = "$host_slash32" ] && continue
+        extra="$extra $p"
+    done
+
+    if [ -n "${host_slash32:-}" ] && [ "$found_host" = no ]; then
+        result="$result, $host_slash32"
+    fi
+
+    EFFECTIVE_ALLOWED_IPS="$result"
+    EXTRA_ALLOWED_IPS="$(trim "$extra")"
+}
+
 # Runs WG-Easy's own migrations and sets interfaces_table.device for wg0 BEFORE
 # WG-Easy starts, so the config it writes and the `wg-quick up` PostUp it runs
-# carry the real device on the very first run (see fix-lan-device.mjs). Safe on
-# an existing database: migrations are recorded so re-running is a no-op, and
-# the UPDATE is idempotent. If the device cannot be determined we keep WG-Easy's
-# stored value (current behaviour) rather than fail.
+# carry the real device on the very first run (see fix-lan-device.mjs). It also
+# sets user_configs_table.default_allowed_ips for wg0 to the derived value.
+# Safe on an existing database: migrations are recorded so re-running is a
+# no-op, and the UPDATEs are idempotent. If the device cannot be determined we
+# keep WG-Easy's stored device (current behaviour) rather than fail.
 configure_wg_easy_device() {
     local dev
     dev="$(detect_lan_device)"
@@ -167,14 +253,41 @@ configure_wg_easy_device() {
         echo "[add-on] WARNING: could not determine the LAN device (no default"
         echo "[add-on] route yet). Keeping WG-Easy's stored device, which may be"
         echo "[add-on] 'eth0' and wrong - LAN routing may then not work."
+        derive_allowed_ips ""
         return 0
     fi
     echo "[add-on] LAN device (default route) = $dev"
-    if node /app/server/fix-lan-device.mjs "$dev"; then
+    derive_allowed_ips "$dev"
+    if node /app/server/fix-lan-device.mjs "$dev" "$EFFECTIVE_ALLOWED_IPS"; then
         echo "[add-on] WG-Easy masquerade device set to '$dev' before startup."
+        echo "[add-on] Default AllowedIPs for new clients set to: $EFFECTIVE_ALLOWED_IPS"
     else
-        echo "[add-on] WARNING: could not update the WG-Easy database device."
+        echo "[add-on] WARNING: could not update the WG-Easy database."
         echo "[add-on] Keeping current behaviour; LAN routing may not work."
+    fi
+}
+
+# ---- LAN reachability warning --------------------------------------------
+# Loud on purpose: if the effective default lets clients reach anything beyond
+# the tunnel subnet and this Home Assistant host, other LAN machines are
+# reachable. This must never be silent.
+warn_if_lan_reachable() {
+    if [ -n "$EXTRA_ALLOWED_IPS" ]; then
+        echo "[add-on] ****************************************************************"
+        echo "[add-on] WARNING: VPN clients can reach MORE than this Home Assistant host."
+        echo "[add-on] The effective default AllowedIPs for NEW clients is:"
+        echo "[add-on]   ${EFFECTIVE_ALLOWED_IPS:-unknown}"
+        echo "[add-on] which includes ranges beyond the tunnel subnet and this Home"
+        echo "[add-on] Assistant host: ${EXTRA_ALLOWED_IPS}"
+        echo "[add-on] A new client can then reach the machines covered by those"
+        echo "[add-on] ranges on your home LAN (cameras, NAS, the Proxmox web UI, ...)."
+        echo "[add-on] To restrict clients to this Home Assistant host only, set the"
+        echo "[add-on] 'allowed_ips' option to just the tunnel subnet (${WG_IPV4_CIDR})."
+        echo "[add-on] ****************************************************************"
+    else
+        echo "[add-on] allowed_ips is restricted: new VPN clients reach this Home"
+        echo "[add-on] Assistant host (and the tunnel subnet) only, not the rest of"
+        echo "[add-on] the LAN."
     fi
 }
 
@@ -187,6 +300,7 @@ enable_ipv4_forwarding
 DB_PREEXISTING=no
 if [ -f "$DB" ]; then DB_PREEXISTING=yes; fi
 configure_wg_easy_device
+warn_if_lan_reachable
 
 # ---- wg-easy environment -------------------------------------------------
 # Web UI listens only on the loopback inside the container; the ingress proxy
@@ -218,7 +332,9 @@ if [ "$DB_PREEXISTING" != "yes" ]; then
     export INIT_HOST="$WG_HOST"
     export INIT_PORT="$WG_PORT"
     export INIT_DNS="$WG_DNS"
-    export INIT_ALLOWED_IPS="$WG_ALLOWED_IPS"
+    # Same value the launcher already wrote to the database above, so the
+    # first-run seed and the stored default cannot disagree.
+    export INIT_ALLOWED_IPS="$EFFECTIVE_ALLOWED_IPS"
     export INIT_IPV4_CIDR="$WG_IPV4_CIDR"
     export INIT_IPV6_CIDR="$WG_IPV6_CIDR"
 else
