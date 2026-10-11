@@ -57,6 +57,66 @@ exposed on a host port.
 - Only `NET_ADMIN` is requested. `SYS_MODULE` is not: HAOS ships no loadable
   netfilter modules, so loading a module is impossible and unnecessary.
 
+### Reaching the rest of the LAN (IPv4 forwarding)
+
+A VPN client reaching the **Home Assistant host's own LAN address** needs no
+routing: the packet is delivered locally. Reaching **any other machine** on the
+home LAN requires the kernel to **forward** the packet from the tunnel interface
+(`wg0`) to the LAN interface, which only happens when `net.ipv4.ip_forward=1`.
+
+`net.ipv4.ip_forward` is a per-network-namespace sysctl. The add-on runs with
+`host_network: true`, so it shares the host's network namespace and, at startup,
+runs `sysctl -w net.ipv4.ip_forward=1` before WG-Easy starts. It is idempotent
+and the effective value is logged.
+
+Two things are worth knowing:
+
+- **On Home Assistant OS the value is normally already `1`.** HAOS relies on the
+  Docker daemon to enable IPv4 forwarding at boot, so the add-on's write is
+  usually a no-op. If forwarding really is the problem, the log line
+  `[add-on] IPv4 forwarding: net.ipv4.ip_forward=0 (effective)` will show it.
+- **The Supervisor mounts `/proc/sys` read-only inside add-on containers.** If
+  the value were `0`, the add-on could not change it (the write fails with
+  `Read-only file system`) and the log says so. In that case the value must be
+  set on the host; this is the situation the official community WireGuard
+  add-on documents under *"IP forwarding is disabled on the host system!"*.
+
+### What the startup log tells you
+
+The launcher logs a `---- network state ----` block a few seconds after start.
+It contains everything needed to diagnose "the HA host is reachable but other
+LAN machines are not":
+
+```
+[add-on] ---- network state ----
+[add-on]   net.ipv4.ip_forward = 1
+[add-on]   wg0 = 10.8.0.1/24
+[add-on]   LAN device (default route) = end0
+[add-on]   NAT MASQUERADE: -A POSTROUTING -s 10.8.0.0/24 -o end0 -j MASQUERADE
+[add-on]   FORWARD policy = DROP
+[add-on]   FORWARD rules:
+[add-on]     -P FORWARD DROP
+[add-on]     -A FORWARD -j DOCKER-USER
+[add-on]     -A FORWARD -j DOCKER-FORWARD
+[add-on]     -A FORWARD -i wg0 -j ACCEPT
+[add-on]     -A FORWARD -o wg0 -j ACCEPT
+[add-on] ---- end network state ----
+```
+
+Interpretation:
+
+- `net.ipv4.ip_forward` must be `1`.
+- The `NAT MASQUERADE` rule's `-o <device>` must be the **same** device as the
+  `LAN device (default route)`. If they differ, the log prints a `NOTE`.
+  WG-Easy stores this device in its database and defaults it to `eth0`; on a host
+  whose LAN interface is named differently (for example `end0` on a Raspberry
+  Pi), **change it in the WG-Easy web UI** under the interface settings. Without
+  a matching MASQUERADE rule, replies from other LAN hosts are not routed back
+  through the tunnel, which produces exactly the "HA host works, other hosts
+  don't" symptom.
+- The `FORWARD` chain has `-i wg0 -j ACCEPT` and `-o wg0 -j ACCEPT` rules (Docker
+  sets the policy to `DROP`), so forwarded tunnel traffic is allowed.
+
 ## Options and the "first run only" caveat
 
 WG-Easy 15.x stores its configuration (host, port, DNS, allowed IPs, clients,
@@ -118,8 +178,21 @@ client was created, and a real WireGuard handshake with a second container was
 observed, with the client able to reach a host on the LAN behind the server. See
 the repository README for the raw evidence.
 
+For `15.4.2` the launcher was additionally built and run on x86_64 Docker: the
+forwarding call runs before WG-Easy and is idempotent, the `---- network state
+----` block is emitted with the effective `net.ipv4.ip_forward`, the `wg0`
+address, the LAN device, the `nat POSTROUTING` MASQUERADE rule and the `FORWARD`
+rules, and `wg0` comes up with the MASQUERADE/FORWARD rules installed. On the
+test host the LAN device (`ens18`) differs from the device WG-Easy stored
+(`eth0`), and the log correctly flagged it.
+
 > **The Home Assistant OS proof is the owner's device.** The local host kernel
-> exposes both netfilter backends, so it cannot reproduce the HAOS-only failure
-> this release fixes. After updating, the add-on log on HAOS must show no
-> `Module ip_tables not found` / `can't initialize iptables table 'nat'` error
-> and a successful `wg-quick up wg0`.
+> exposes both netfilter backends and its `/proc/sys` is writable on the host, so
+> it cannot reproduce the HAOS-only behaviour (read-only `/proc/sys`, forwarding
+> already enabled by Docker). After updating, the add-on log on HAOS must show:
+>
+> - no `Module ip_tables not found` / `can't initialize iptables table 'nat'`;
+> - a successful `wg-quick up wg0`;
+> - `[add-on] IPv4 forwarding: net.ipv4.ip_forward=1 (effective)`;
+> - a `---- network state ----` block whose MASQUERADE `-o` device matches the
+>   `LAN device (default route)` (no `NOTE` line).
