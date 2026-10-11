@@ -93,6 +93,8 @@ LAN machines are not":
 [add-on]   wg0 = 10.8.0.1/24
 [add-on]   LAN device (default route) = end0
 [add-on]   NAT MASQUERADE: -A POSTROUTING -s 10.8.0.0/24 -o end0 -j MASQUERADE
+[add-on]   OK: MASQUERADE '-o end0' matches the LAN device,
+[add-on]   so VPN clients can reach other machines on the home LAN.
 [add-on]   FORWARD policy = DROP
 [add-on]   FORWARD rules:
 [add-on]     -P FORWARD DROP
@@ -107,15 +109,49 @@ Interpretation:
 
 - `net.ipv4.ip_forward` must be `1`.
 - The `NAT MASQUERADE` rule's `-o <device>` must be the **same** device as the
-  `LAN device (default route)`. If they differ, the log prints a `NOTE`.
-  WG-Easy stores this device in its database and defaults it to `eth0`; on a host
-  whose LAN interface is named differently (for example `end0` on a Raspberry
-  Pi), **change it in the WG-Easy web UI** under the interface settings. Without
-  a matching MASQUERADE rule, replies from other LAN hosts are not routed back
-  through the tunnel, which produces exactly the "HA host works, other hosts
-  don't" symptom.
+  `LAN device (default route)`. The add-on now **sets this automatically** (see
+  *The masquerade device* below), so the log should print an `OK` line. If it
+  prints a `NOTE` instead, the two devices differ and the add-on could not fix
+  it — without a matching MASQUERADE rule, replies from other LAN hosts are not
+  routed back through the tunnel, which produces exactly the "HA host works,
+  other hosts don't" symptom.
 - The `FORWARD` chain has `-i wg0 -j ACCEPT` and `-o wg0 -j ACCEPT` rules (Docker
   sets the policy to `DROP`), so forwarded tunnel traffic is allowed.
+
+### The masquerade device
+
+WG-Easy installs this rule to let VPN clients reach the rest of the home LAN:
+
+```
+iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o <device> -j MASQUERADE
+```
+
+It stores `<device>` in its database and **seeds it as `eth0`** in its first
+migration. On any host whose LAN interface has a different name — `end0` on a
+Raspberry Pi, `ens18` on many VMs — the rule never matches, replies from other
+LAN machines are dropped, and only the Home Assistant host itself is reachable
+over the VPN (it needs no masquerading). Correcting the field once in the web UI
+is not enough: **a reinstall re-seeds the database with `eth0`**.
+
+The add-on therefore detects the LAN device itself and writes it into the
+WG-Easy database **before WG-Easy starts**, every start:
+
+- The device of the **default route** is the right notion of "the LAN
+  interface": it is where traffic to the internet and the rest of the LAN
+  leaves. It is read with `ip -o route show default`.
+- The launcher runs `fix-lan-device.mjs`, which runs WG-Easy's own database
+  migrations and then sets `interfaces_table.device` for `wg0` to that device.
+  Because this happens before `node server/index.mjs`, the `wg0.conf` and the
+  `wg-quick up` PostUp hook that WG-Easy generates carry the real device on the
+  very first run — no restart and no manual step are needed.
+- The step is idempotent: migrations are recorded (re-running is a no-op) and
+  the `UPDATE` writes the same value on every later start. A fresh install and
+  an existing database both end up correct.
+- If the device cannot be determined (no default route yet), the add-on logs a
+  `WARNING` and keeps WG-Easy's stored value — current behaviour, no crash.
+
+Nothing in the web UI needs changing, and a reinstall cannot reintroduce the
+defect.
 
 ## Options and the "first run only" caveat
 
@@ -186,13 +222,40 @@ rules, and `wg0` comes up with the MASQUERADE/FORWARD rules installed. On the
 test host the LAN device (`ens18`) differs from the device WG-Easy stored
 (`eth0`), and the log correctly flagged it.
 
+For `15.4.3` the built image was run on x86_64 Docker (with `--network host`, so
+the container sees the host's default-route device, as `host_network: true`
+does on HAOS) against both an empty `/etc/wireguard` and an existing database:
+
+- the launcher logged `LAN device (default route) = ens18` and
+  `WG-Easy masquerade device set to 'ens18' before startup`;
+- `fix-lan-device.mjs` created and migrated a fresh database and set
+  `interfaces_table.device` to `ens18` (one row updated);
+- the generated `/etc/wireguard/wg0.conf` carried
+  `PostUp = iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o ens18 -j MASQUERADE`
+  (and the matching `PostDown`), i.e. the real device, not `eth0`;
+- `wg-quick up wg0` installed `-A POSTROUTING -s 10.8.0.0/24 -o ens18 -j
+  MASQUERADE` and the log printed the `OK:` line;
+- on the **fresh** database the first-run setup still ran
+  (`Creating initial user`, `Setting initial host and port`), so the
+  "first run only" semantics are intact;
+- a **restart** with the existing database logged
+  `Existing database found: keeping stored WG-Easy configuration`, kept
+  `device = ens18` and printed `OK:` again — idempotent, no restart loop;
+- with `--network none` (no default route) the launcher logged the `WARNING:
+  could not determine the LAN device` message and continued, leaving WG-Easy's
+  stored device (`eth0`) in place.
+
 > **The Home Assistant OS proof is the owner's device.** The local host kernel
-> exposes both netfilter backends and its `/proc/sys` is writable on the host, so
-> it cannot reproduce the HAOS-only behaviour (read-only `/proc/sys`, forwarding
-> already enabled by Docker). After updating, the add-on log on HAOS must show:
+> exposes both netfilter backends, its `/proc/sys` is writable on the host, and
+> its LAN device name (`ens18`) is not the Pi's (`end0`), so the local host
+> cannot reproduce the HAOS-only behaviour (read-only `/proc/sys`, forwarding
+> already enabled by Docker) nor the Pi's exact interface name. After updating,
+> the add-on log on HAOS must show:
 >
 > - no `Module ip_tables not found` / `can't initialize iptables table 'nat'`;
 > - a successful `wg-quick up wg0`;
 > - `[add-on] IPv4 forwarding: net.ipv4.ip_forward=1 (effective)`;
+> - `[add-on] LAN device (default route) = end0` and
+>   `WG-Easy masquerade device set to 'end0' before startup`;
 > - a `---- network state ----` block whose MASQUERADE `-o` device matches the
->   `LAN device (default route)` (no `NOTE` line).
+>   `LAN device (default route)`, with the `OK:` line (no `NOTE` line).

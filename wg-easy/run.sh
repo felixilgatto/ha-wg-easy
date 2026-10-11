@@ -115,6 +115,9 @@ dump_network_state() {
             echo "[add-on]   default-route (LAN) device is '${dev}'. If they differ,"
             echo "[add-on]   LAN-bound traffic is not NATed and other LAN hosts are"
             echo "[add-on]   unreachable (the Home Assistant host itself still works)."
+        elif [ -n "$dev" ] && [ -n "$masq_dev" ]; then
+            echo "[add-on]   OK: MASQUERADE '-o ${masq_dev}' matches the LAN device,"
+            echo "[add-on]   so VPN clients can reach other machines on the home LAN."
         fi
     else
         echo "[add-on]   NAT MASQUERADE: none for ${WG_IPV4_CIDR} - return traffic"
@@ -129,7 +132,61 @@ dump_network_state() {
     echo "[add-on] ---- end network state ----"
 }
 
+# ---- point WG-Easy at the real LAN device --------------------------------
+# WG-Easy keeps the LAN device in its database and substitutes it into the
+# PostUp hook it writes to /etc/wireguard/wg0.conf:
+#
+#   iptables -t nat -A POSTROUTING -s <ipv4Cidr> -o <device> -j MASQUERADE
+#
+# That column is seeded as 'eth0' by WG-Easy's first migration
+# (server/database/migrations/0001_classy_the_stranger.sql), which is wrong
+# wherever the LAN interface has a different name (e.g. 'end0' on a Raspberry
+# Pi). The MASQUERADE rule then never matches and replies from other LAN hosts
+# are dropped, so only the Home Assistant host itself is reachable over the
+# VPN. Because a reinstall re-seeds the database with 'eth0', correcting the
+# field once in the web UI is not enough - the launcher must set it every start.
+#
+# The device of the default route is the right notion of "the LAN interface":
+# it is the interface traffic to the internet (and to the rest of the LAN)
+# leaves through, which is exactly what the MASQUERADE rule must match.
+detect_lan_device() {
+    ip -o route show default 2>/dev/null \
+        | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }}'
+}
+
+# Runs WG-Easy's own migrations and sets interfaces_table.device for wg0 BEFORE
+# WG-Easy starts, so the config it writes and the `wg-quick up` PostUp it runs
+# carry the real device on the very first run (see fix-lan-device.mjs). Safe on
+# an existing database: migrations are recorded so re-running is a no-op, and
+# the UPDATE is idempotent. If the device cannot be determined we keep WG-Easy's
+# stored value (current behaviour) rather than fail.
+configure_wg_easy_device() {
+    local dev
+    dev="$(detect_lan_device)"
+    if [ -z "$dev" ]; then
+        echo "[add-on] WARNING: could not determine the LAN device (no default"
+        echo "[add-on] route yet). Keeping WG-Easy's stored device, which may be"
+        echo "[add-on] 'eth0' and wrong - LAN routing may then not work."
+        return 0
+    fi
+    echo "[add-on] LAN device (default route) = $dev"
+    if node /app/server/fix-lan-device.mjs "$dev"; then
+        echo "[add-on] WG-Easy masquerade device set to '$dev' before startup."
+    else
+        echo "[add-on] WARNING: could not update the WG-Easy database device."
+        echo "[add-on] Keeping current behaviour; LAN routing may not work."
+    fi
+}
+
 enable_ipv4_forwarding
+
+# Remember whether the database already existed *before* configure_wg_easy_device
+# runs: that step creates the database (by running WG-Easy's own migrations) on a
+# fresh install, so the first-run check further down must not be fooled into
+# thinking this is a restart.
+DB_PREEXISTING=no
+if [ -f "$DB" ]; then DB_PREEXISTING=yes; fi
+configure_wg_easy_device
 
 # ---- wg-easy environment -------------------------------------------------
 # Web UI listens only on the loopback inside the container; the ingress proxy
@@ -150,7 +207,10 @@ export DISABLE_IPV6="$DISABLE_IPV6_OPT"
 
 # INIT_* variables are consumed by wg-easy only on the very first start, when
 # the database does not exist yet. See DOCS.md for the "first run only" caveat.
-if [ ! -f "$DB" ]; then
+# The test uses DB_PREEXISTING (captured before configure_wg_easy_device, which
+# creates the database on a fresh install) so a first start still seeds the
+# initial admin user and host/port from the add-on options.
+if [ "$DB_PREEXISTING" != "yes" ]; then
     echo "[add-on] First run: applying initial configuration from add-on options."
     export INIT_ENABLED=true
     export INIT_USERNAME="$WG_USERNAME"

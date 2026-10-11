@@ -43,6 +43,7 @@ RUN set -eux; \
 
 COPY run.sh /run.sh
 COPY ingress-proxy.mjs /ingress-proxy.mjs
+COPY fix-lan-device.mjs /app/server/fix-lan-device.mjs
 RUN chmod a+x /run.sh
 
 LABEL \

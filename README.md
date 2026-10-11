@@ -25,7 +25,7 @@ Ingress design notes are in [`wg-easy/DOCS.md`](wg-easy/DOCS.md).
 
 | Add-on | Version | Description |
 | --- | --- | --- |
-| [wg-easy](wg-easy) | 15.4.2 | WireGuard VPN + WG-Easy web UI as an Ingress panel |
+| [wg-easy](wg-easy) | 15.4.3 | WireGuard VPN + WG-Easy web UI as an Ingress panel |
 
 ## Design notes (short version)
 
@@ -37,6 +37,43 @@ exposing a LAN port, the add-on runs WG-Easy under a **fixed internal base**
 (`/_haingress`) and ships a small **reverse proxy** that translates between that
 fixed base and the dynamic Ingress prefix on every request and response. See
 [`wg-easy/DOCS.md`](wg-easy/DOCS.md).
+
+## LAN access on Home Assistant OS (the `15.4.3` fix)
+
+`15.4.2` made the MASQUERADE-vs-LAN-device mismatch **visible** in the log. The
+remaining defect was that WG-Easy's MASQUERADE rule targets a hardcoded `eth0`:
+
+```
+iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE
+```
+
+`eth0` is seeded in WG-Easy's first database migration, so on any host whose LAN
+interface is named otherwise (`end0` on a Raspberry Pi, `ens18` on a VM) the rule
+never matches, replies from other LAN hosts are dropped, and **only the Home
+Assistant host itself is reachable** over the VPN (it needs no masquerading).
+That is exactly the reported symptom: `http://192.168.0.15:8123` (the HA host)
+works while `http://192.168.0.200:8006` (another LAN machine) does not. Changing
+the device once in the web UI is not durable — a reinstall re-seeds `eth0`.
+
+`15.4.3` fixes this **in the add-on, every start, with no web-UI step**:
+
+- The launcher detects the LAN device itself — the **default route** device
+  (`ip -o route show default`), i.e. where traffic to the internet and the rest
+  of the LAN leaves.
+- **Before** WG-Easy starts, it runs WG-Easy's own database migrations and sets
+  `interfaces_table.device` for `wg0` to that device (`fix-lan-device.mjs`).
+  Because WG-Easy reads this row at startup to write `wg0.conf` and run
+  `wg-quick up wg0`, the PostUp hook that ends up installed carries the **real**
+  device on the first run — no restart, no manual step.
+- It is idempotent and handles both cases: a fresh install (the script creates
+  and seeds the database) and an existing one (migrations are recorded, the
+  `UPDATE` rewrites the same value). A reinstall therefore cannot reintroduce
+  the defect.
+- If the device cannot be determined (no default route), the add-on logs a
+  `WARNING` and keeps WG-Easy's stored value rather than crash.
+- The `---- network state ----` block now prints an `OK:` line when the
+  installed MASQUERADE `-o` device matches the default-route device, so one log
+  line confirms success.
 
 ## LAN access on Home Assistant OS (the `15.4.2` fix)
 
@@ -65,8 +102,8 @@ Two findings from testing worth stating plainly:
 - **WG-Easy defaults its MASQUERADE device to `eth0`.** On a host whose LAN
   interface is named otherwise (e.g. `end0` on a Raspberry Pi, `ens18` here) the
   MASQUERADE rule never matches and replies from other LAN hosts are dropped —
-  the exact "HA host reachable, other hosts not" symptom. Change the device in
-  the WG-Easy web UI to match the logged `LAN device (default route)`.
+  the exact "HA host reachable, other hosts not" symptom. `15.4.2` only *logged*
+  this; `15.4.3` (above) fixes it automatically.
 
 ## LAN access on Home Assistant OS (the `15.4.1` fix)
 
@@ -121,24 +158,50 @@ For `15.4.2` specifically, on x86_64 Docker:
   directly (a container write returns `Read-only file system`, exit 1, and the
   effective value is unchanged).
 
+For `15.4.3` specifically, on x86_64 Docker with `--network host` (so the
+container sees the host's default-route device, as `host_network: true` does on
+HAOS), against both an empty `/etc/wireguard` and an existing database:
+
+- `bash -n` and `node --check` are clean and the image builds;
+- the launcher logged `LAN device (default route) = ens18` and
+  `WG-Easy masquerade device set to 'ens18' before startup`;
+- on the **fresh** database, `fix-lan-device.mjs` created and migrated it and set
+  `interfaces_table.device = 'ens18'` (1 row updated), and the first-run setup
+  still ran (`Creating initial user`, `Setting initial host and port`);
+- the generated `wg0.conf` carried
+  `PostUp = iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o ens18 -j MASQUERADE`
+  (and the matching `PostDown`) — the **real** device, not `eth0`;
+- `wg-quick up wg0` installed `-A POSTROUTING -s 10.8.0.0/24 -o ens18 -j
+  MASQUERADE` and the log printed the `OK:` line;
+- a **restart** with the existing database kept `device = ens18`, logged
+  `Existing database found` and printed `OK:` again — idempotent, no loop;
+- with `--network none` (no default route) the `WARNING: could not determine the
+  LAN device` fallback fired and WG-Easy's stored `eth0` was left in place.
+
 ### What is NOT verified here (the real proof is the Pi)
 
 The local host kernel exposes **both** the legacy and the nft netfilter `nat`
-tables, and its `/proc/sys` is writable on the host, so it cannot reproduce the
-HAOS-only behaviour: `/proc/sys` being read-only inside the add-on container, and
-IPv4 forwarding already being enabled by Docker. The change is proven correct by
-reasoning + the official add-on's precedent + the local run — but **the
-end-to-end proof is the owner's Home Assistant OS device**. On the Pi, after
-updating to `15.4.2`, the add-on log must show:
+tables, its `/proc/sys` is writable on the host, and its LAN interface is named
+`ens18` — none of which matches Home Assistant OS (read-only `/proc/sys`,
+forwarding already enabled by Docker) or the owner's Raspberry Pi (`end0`). So
+the HAOS-only behaviour and the Pi's exact interface name cannot be reproduced
+here. The change is proven by reading the pinned image's own code (WG-Easy
+substitutes `{{device}}` from `interfaces_table.device`, read at startup before
+`wg-quick up`), plus the local run above — but **the end-to-end proof is the
+owner's Home Assistant OS device**. On the Pi, after updating to `15.4.3`, the
+add-on log must show:
 
 - **no** `modprobe: FATAL: Module ip_tables not found` and **no**
   `can't initialize iptables table 'nat'`;
 - `wg-quick up wg0` completing **without** the
   `Error: Command failed: wg-quick up wg0 (code 3)` rollback;
 - `[add-on] IPv4 forwarding: net.ipv4.ip_forward=1 (effective)`;
+- `[add-on] LAN device (default route) = end0` and
+  `WG-Easy masquerade device set to 'end0' before startup`;
 - a `---- network state ----` block whose MASQUERADE `-o` device equals the
-  `LAN device (default route)` (i.e. **no** `NOTE` line);
-- the WireGuard peer then able to ping a device on the home LAN.
+  `LAN device (default route)`, with the `OK:` line (**no** `NOTE` line);
+- the WireGuard peer then able to reach `http://192.168.0.200:8006` (the Proxmox
+  host), not just `http://192.168.0.15:8123`.
 
 Raw output of the local verification is in the task report that accompanied this
 repository.

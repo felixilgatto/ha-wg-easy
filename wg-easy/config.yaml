@@ -1,5 +1,5 @@
 name: "WG-Easy VPN"
-version: "15.4.2"
+version: "15.4.3"
 slug: "wg-easy"
 description: >-
   WireGuard VPN server with the WG-Easy web interface. The web UI is exposed

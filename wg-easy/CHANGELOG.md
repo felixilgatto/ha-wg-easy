@@ -1,5 +1,56 @@
 # Changelog
 
+## 15.4.3
+
+- **Fix: VPN clients can now reach other machines on the home LAN, not just the
+  Home Assistant host — automatically, with no web-UI step and no way for a
+  reinstall to reintroduce the problem.** WG-Easy installs
+  `iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o <device> -j MASQUERADE` to
+  NAT tunnel traffic onto the LAN, but it **hardcodes `<device>` as `eth0`** in
+  its first database migration
+  (`server/database/migrations/0001_classy_the_stranger.sql`). On any host whose
+  LAN interface is named differently (`end0` on a Raspberry Pi, `ens18` on many
+  VMs) the rule never matches, replies from other LAN hosts are dropped, and
+  only the Home Assistant host itself (which needs no masquerading) is reachable
+  over the VPN. Editing the device in the WG-Easy web UI fixes one install but a
+  **reinstall re-seeds the database with `eth0`**.
+
+  The launcher now detects the LAN device itself (the **default route** device —
+  where traffic to the internet and the rest of the LAN leaves) and, **before
+  WG-Easy starts**, runs WG-Easy's own database migrations and sets
+  `interfaces_table.device` for `wg0` to that device (`fix-lan-device.mjs`).
+  Because this happens before `node server/index.mjs`, the `wg0.conf` and the
+  `wg-quick up` PostUp hook WG-Easy generates carry the **real** device on the
+  very first run. The step is idempotent (migrations are recorded; the `UPDATE`
+  writes the same value every start) and works on a fresh install (it creates
+  and seeds the database) as well as on an existing one. If the device cannot be
+  determined, the add-on logs a `WARNING` and keeps WG-Easy's stored value
+  instead of crashing.
+
+- The `---- network state ----` log block now also prints an `OK:` line when the
+  installed MASQUERADE `-o` device matches the default-route (LAN) device, so a
+  single log line confirms it worked. The `NOTE` line for a mismatch is kept.
+- First-run semantics are preserved: the first-run check uses the database's
+  state *before* the new step runs, so a fresh install still creates the initial
+  admin user and host/port from the add-on options.
+- Still embeds WG-Easy `15.4.0` (`ghcr.io/wg-easy/wg-easy:15.4.0`). Ingress-only
+  UI, no published LAN port, configurable UDP port, pinned image tag,
+  `/etc/wireguard` persistence and first-run semantics are unchanged. The
+  nftables (`15.4.1`) and IPv4-forwarding (`15.4.2`) fixes are untouched.
+
+> Verified locally on x86_64 Docker (not Home Assistant OS), with `--network
+> host` so the container sees the host's default-route device as the add-on does
+> on HAOS: on an empty `/etc/wireguard` the launcher logged
+> `LAN device (default route) = ens18`, `fix-lan-device.mjs` created and
+> migrated the database and set `device = ens18`, the generated `wg0.conf`
+> carried `PostUp = ... -o ens18 -j MASQUERADE`, `wg-quick up wg0` installed the
+> matching rule and the log printed the `OK:` line; the first-run admin user was
+> still created; and a restart with the existing database kept `device = ens18`
+> and printed `OK:` again (idempotent, no loop). With no default route the
+> `WARNING` fallback fired and WG-Easy's stored `eth0` was left in place. **The
+> Home Assistant OS proof — and the Pi's real interface name (`end0`) — cannot
+> be reproduced here**; see DOCS.md and README.md.
+
 ## 15.4.2
 
 - **Add-on now enables IPv4 forwarding itself, and logs the routing state at
