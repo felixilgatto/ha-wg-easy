@@ -101,6 +101,8 @@ use a dynamic-DNS hostname and put it in the `host` option.
 ## Verified
 
 The container image was built and run on an x86_64 host: the WireGuard
-interface came up, the web UI answered through an Ingress-style prefixed proxy,
-a client was created, and a real WireGuard handshake with a second container was
-observed. See the repository README for the raw evidence.
+interface came up, the web UI answered through an Ingress-style prefixed proxy
+(and refused requests without the Ingress header), a client was created, and a
+real WireGuard handshake with a second container was observed, with the client
+able to reach a host on the LAN behind the server. See the repository README for
+the raw evidence.

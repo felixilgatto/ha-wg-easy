@@ -20,7 +20,6 @@ host_network: true
 # No host port is published for the web UI; the proxy listens on ingress_port.
 ingress: true
 ingress_port: 8099
-ingress_stream: true
 panel_icon: "mdi:vpn"
 panel_title: "WG-Easy"
 panel_admin: false

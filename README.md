@@ -47,8 +47,12 @@ Built and run on an x86_64 host with Docker:
 - the web UI loads through a proxy that mimics Home Assistant Ingress
   (request forwarded with a stripped `/api/hassio_ingress/<token>/` prefix and an
   `X-Ingress-Path` header) — assets, login and the SPA work;
+- a direct request to the proxy port **without** the `X-Ingress-Path` header is
+  refused (`403`), so the UI is not usable as a plain LAN port;
 - a client config was created through the UI/API and a **real WireGuard
-  handshake** with a second container was observed on the server.
+  handshake** with a second container was observed on the server, with the
+  client able to ping both the tunnel address and a host on the LAN behind the
+  server.
 
 Raw output is in the task report that accompanied this repository.
 

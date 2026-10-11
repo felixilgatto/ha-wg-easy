@@ -58,6 +58,15 @@ function upstreamHeaders(req) {
 
 const server = http.createServer((req, res) => {
   const ingressPath = req.headers['x-ingress-path'] || '';
+  // Home Assistant Ingress always sets X-Ingress-Path. The add-on runs with
+  // host_network, so this port is technically reachable on the host's LAN
+  // interfaces; refuse anything that did not come through Ingress so the web
+  // UI is never exposed as a plain LAN port.
+  if (!ingressPath) {
+    res.writeHead(403, { 'content-type': 'text/plain' });
+    res.end('This add-on web UI is only reachable through Home Assistant Ingress.\n');
+    return;
+  }
   const clean = stripIngressPath(req.url || '/', ingressPath);
   const upPath = BASE + (clean === '/' ? '/' : clean);
 
@@ -100,6 +109,10 @@ const server = http.createServer((req, res) => {
 // WebSocket / HTTP upgrade passthrough (wg-easy live updates).
 server.on('upgrade', (req, socket, head) => {
   const ingressPath = req.headers['x-ingress-path'] || '';
+  if (!ingressPath) {
+    socket.destroy();
+    return;
+  }
   const clean = stripIngressPath(req.url || '/', ingressPath);
   const preq = http.request({
     host: UPSTREAM_HOST,
