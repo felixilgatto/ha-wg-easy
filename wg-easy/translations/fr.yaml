@@ -1,0 +1,60 @@
+configuration:
+  host:
+    name: "Adresse publique"
+    description: >-
+      Adresse IP publique ou nom DNS auquel les clients VPN se connectent.
+      Laisser vide pour utiliser l'adresse détectée au premier démarrage
+      (modifiable dans le panneau WG-Easy). Si elle est renseignée, elle
+      remplace la valeur du panneau à chaque démarrage.
+  port:
+    name: "Port WireGuard (UDP)"
+    description: >-
+      Port UDP sur lequel WireGuard écoute. Redirigez ce port vers Home
+      Assistant sur votre box.
+  allowed_ips:
+    name: "Réseaux autorisés"
+    description: >-
+      Plages supplémentaires accessibles aux clients VPN, séparées par des
+      virgules (par exemple votre réseau local 192.168.1.0/24). Vide signifie
+      Home Assistant uniquement. Appliqué côté serveur pour tous les clients, et
+      utilisé comme routage des nouveaux clients.
+  disable_ipv6:
+    name: "Désactiver l'IPv6"
+    description: >-
+      Désactive l'IPv6 dans le tunnel. L'IPv4 suffit pour accéder à un réseau
+      domestique.
+  home_assistant_entities:
+    name: "Entités Home Assistant"
+    description: >-
+      Crée des entités pour le VPN et chaque client via MQTT, quand l'add-on
+      Mosquitto broker est installé.
+  dns:
+    name: "Serveurs DNS (forcer)"
+    description: >-
+      Serveurs DNS donnés aux nouveaux clients, séparés par des virgules.
+      Laisser vide pour les gérer dans le panneau WG-Easy.
+  mtu:
+    name: "MTU (forcer)"
+    description: >-
+      MTU de l'interface et des nouveaux clients. Laisser vide pour le gérer
+      dans le panneau WG-Easy.
+  persistent_keepalive:
+    name: "Keepalive persistant (forcer)"
+    description: >-
+      Intervalle de keepalive en secondes pour les nouveaux clients (0 =
+      désactivé). Laisser vide pour le gérer dans le panneau WG-Easy.
+  ipv4_cidr:
+    name: "Plage IPv4 du tunnel (première installation uniquement)"
+    description: >-
+      Utilisée uniquement au tout premier démarrage. Ensuite, modifiez-la dans
+      le panneau WG-Easy, qui renumérote aussi les clients existants.
+  ipv6_cidr:
+    name: "Plage IPv6 du tunnel (première installation uniquement)"
+    description: >-
+      Utilisée uniquement au tout premier démarrage. Ensuite, modifiez-la dans
+      le panneau WG-Easy.
+  metrics_port:
+    name: "Port des métriques"
+    description: >-
+      Expose les métriques Prometheus et JSON de WG-Easy sur ce port de votre
+      réseau. Activez-les, et définissez un jeton, dans le panneau WG-Easy.

@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+# A new push to the same branch or PR cancels the run it supersedes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Home Assistant app lint
+        uses: frenck/action-addon-linter@v2.21
+        with:
+          path: "./wg-easy"
+
+      - name: ShellCheck
+        run: shellcheck -S warning wg-easy/run.sh tests/smoke.sh
+
+      - name: Node syntax check
+        run: for f in wg-easy/addon/*.mjs; do node --check "$f"; done
+
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    # aarch64 is built under QEMU, which is slow.
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+          - arch: aarch64
+            platform: linux/arm64
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        if: matrix.arch != 'amd64'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        run: |
+          docker buildx build --load --platform "${{ matrix.platform }}" \
+            --build-arg BUILD_VERSION=ci --build-arg BUILD_ARCH="${{ matrix.arch }}" \
+            -t "wgeasy-addon:${{ matrix.arch }}" wg-easy
+
+      # The add-on cannot load kernel modules (no SYS_MODULE, like on HAOS),
+      # so load what WireGuard and the nftables backend need on the runner.
+      - name: Load kernel modules
+        if: matrix.arch == 'amd64'
+        run: sudo modprobe -a wireguard nf_tables nft_nat nft_compat
+
+      # End-to-end test (persistence, auto-login, MQTT entities, recovery, ...).
+      # Runs on the native architecture only: WireGuard needs the runner's kernel.
+      - name: Smoke test
+        if: matrix.arch == 'amd64'
+        run: tests/smoke.sh "wgeasy-addon:${{ matrix.arch }}"

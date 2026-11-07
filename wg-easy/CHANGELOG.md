@@ -1,5 +1,83 @@
 # Changelog
 
+## 15.4.6
+
+The add-on now works as installed, keeps its data, and integrates with Home Assistant.
+
+### Data safety (fixes data loss on updates and restarts)
+
+- **Data is now persistent.** WG-Easy keeps everything (server keys, clients, users, settings) in
+  `/etc/wireguard`. That folder lived inside the container, which the Supervisor recreates on every
+  start, restart and update, so the add-on silently started again from an empty database with new
+  server keys, and every existing client broke. It now lives in `/data/wireguard`.
+  > Data stored by earlier versions was inside the old container and cannot be recovered by this
+  > update. Recreate your clients once after updating.
+- **Verified database snapshot before every start**, so before any WG-Easy migration, in
+  `/data/backups` (the 10 newest are kept).
+- **Automatic recovery.** A database that fails SQLite's integrity check is moved to
+  `/data/backups/corrupt-<date>/` and the newest valid snapshot is restored. With none, the add-on
+  refuses to start instead of creating an empty database.
+- **Included in Home Assistant backups**, without stopping the VPN. A `backup_pre` hook first writes a
+  consistent copy of the database.
+- **Clean shutdown.** `SIGTERM` is forwarded to WG-Easy, which closes the database and takes `wg0`
+  down, instead of being killed after the stop timeout. A `wg0` left over by a killed run is removed
+  at start.
+
+### Works as installed
+
+- **No option is required.** On the first start the public address is detected, and WG-Easy is
+  configured with its admin account, host and port: no setup wizard.
+- **No second login.** The ingress proxy logs the panel in with an add-on-managed admin account
+  (random password in `/data`). It logs in again by itself after a logout, an expired session, or a
+  password or 2FA change made in the panel.
+- **The panel is restricted to Home Assistant administrators** (`panel_admin`), since it controls
+  access to the network.
+- A "starting…" page that reloads by itself is shown while WG-Easy boots.
+
+### Options
+
+- Removed `username`, `password` and `reset_admin_password` (the login is managed by the add-on).
+- `host` is now optional (detected on the first start). When set, it is applied on every start.
+- `port` is applied on every start. The public port follows it unless it was customised in the panel.
+- `allowed_ips` now defaults to empty, which means "Home Assistant only". The tunnel range is always
+  included; the old default `10.8.0.0/24` keeps working.
+- New optional overrides, applied on every start when filled in: `dns`, `mtu`,
+  `persistent_keepalive`.
+- `ipv4_cidr` / `ipv6_cidr` are optional and used on the first installation only, as before. A note is
+  logged if they differ from the live tunnel.
+- New `metrics_port`: serves only WG-Easy's `/metrics/prometheus` and `/metrics/json` on that port.
+- New `home_assistant_entities` (default on).
+- Option names and descriptions in English and French.
+
+### Home Assistant entities (MQTT discovery)
+
+- With the Mosquitto broker add-on installed, the add-on gets the broker from the Supervisor
+  (`services: mqtt:want`) and publishes a **WG-Easy VPN** device (clients, connected clients,
+  *Restart interface* button) and one **VPN <client>** device per client (*Enabled* switch,
+  *Connected*, *Received*, *Sent*, *Last handshake*, *Endpoint*, *IPv4 address*, *Expires*). Clients
+  added, renamed or deleted in the panel follow automatically. Without a broker the add-on runs as
+  before and says how to get entities.
+
+### Reliability and tooling
+
+- Docker `HEALTHCHECK` (WG-Easy answering and `wg0` present); the Supervisor restarts an unhealthy
+  add-on. The launcher exits with an error if WG-Easy or the proxy dies.
+- Image labels and `ADDON_VERSION` now carry the real version (the build arguments were not
+  re-declared after `FROM`).
+- Node helpers moved to `addon/` and resolved against WG-Easy's own modules; `mqtt` pinned through
+  `package-lock.json`. `fix-lan-device.mjs` is replaced by `addon/prepare-db.mjs`.
+- `tests/smoke.sh`: end-to-end test in Docker. Official app devcontainer (`.devcontainer.json`,
+  `.vscode/tasks.json`). CI: official app linter, ShellCheck, amd64 + aarch64 build, smoke test.
+- `config.yaml` passes the official app linter (default values removed, `watchdog` replaced by the
+  `HEALTHCHECK`).
+
+> Verified in Docker (`tests/smoke.sh`, 36 checks) and in the official devcontainer with a real
+> Supervisor and Home Assistant 2026.11: zero-config install, real Ingress panel opened logged in,
+> Mosquitto picked up automatically, entities created in Home Assistant, switch and button
+> round-trips, Home Assistant backup + restore, and a real add-on update (15.4.6 → 15.4.7) keeping
+> clients and server key. **Not verified on a Raspberry Pi / Home Assistant OS device**, nor with a
+> real VPN client connecting from outside.
+
 ## 15.4.5
 
 - **Security: the web UI port now accepts connections only from the Home

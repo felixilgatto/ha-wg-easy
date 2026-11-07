@@ -2,3 +2,6 @@
 *.log
 scratch/
 .DS_Store
+
+# Node dependencies are installed inside the image (npm ci), never committed
+node_modules/
