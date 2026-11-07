@@ -1,0 +1,35 @@
+# Dependabot version updates. Each PR runs the full CI, smoke test included.
+#
+# A WG-Easy bump (docker) is not releasable on its own: also raise `version` in
+# wg-easy/config.yaml (otherwise Home Assistant offers no update), add a
+# CHANGELOG entry, and check the release for new database migrations, which
+# wg-easy/addon/prepare-db.mjs runs before WG-Easy starts.
+version: 2
+updates:
+  # Base image: FROM ghcr.io/wg-easy/wg-easy:<version> in wg-easy/Dockerfile
+  - package-ecosystem: docker
+    directory: /wg-easy
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "deps(wg-easy)"
+
+  # Add-on Node dependencies (mqtt), pinned by wg-easy/addon/package-lock.json
+  - package-ecosystem: npm
+    directory: /wg-easy/addon
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "deps(addon)"
+
+  # Actions used by .github/workflows
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
