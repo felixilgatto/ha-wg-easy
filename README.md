@@ -99,7 +99,7 @@ These come from WG-Easy itself or from Home Assistant OS, and cannot be lifted b
   Assistant's: only its administrators can open the panel.
 - **Port forwarding is up to you.** The add-on cannot configure your router. Behind a carrier-grade NAT
   (the WAN address on your router differs from your public IP), incoming VPN connections cannot work.
-- **Data from versions before 15.4.6 is not recoverable.** Those versions did not store data
+- **Data from add-on versions before 15.4.6 is not recoverable.** Those versions did not store data
   persistently. Clients created before updating have to be recreated once.
 
 ## Development
@@ -110,6 +110,18 @@ These come from WG-Easy itself or from Home Assistant OS, and cannot be lifted b
   real Supervisor and Home Assistant
   ([guide](https://contributors.home-assistant.io/apps/guides/testing/)).
 - CI runs the official app linter, ShellCheck, an amd64 + aarch64 build and the smoke test.
+
+## Versions
+
+The add-on has its own [semantic version](https://semver.org), independent of WG-Easy's, starting at
+`1.0.0`. Each release notes the WG-Easy version it bundles in the
+[changelog](wg-easy/CHANGELOG.md), and the add-on logs both at start-up. Versions up to `15.5.0`
+followed WG-Easy's numbering.
+
+- **major**: a change you must act on (removed option, new requirement, data migration you have to
+  check);
+- **minor**: new features, or a new WG-Easy minor/major version;
+- **patch**: fixes, security updates, new WG-Easy patch version.
 
 ## Credits and licence
 

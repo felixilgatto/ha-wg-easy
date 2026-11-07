@@ -36,7 +36,10 @@ const SERVER_DEVICE = {
     name: "WG-Easy VPN",
     manufacturer: "WG-Easy",
     model: "WireGuard server",
-    sw_version: process.env.ADDON_VERSION || undefined,
+    // e.g. "1.0.0 (WG-Easy 15.5.0)": add-on version first, bundled WG-Easy after.
+    sw_version: process.env.ADDON_VERSION
+        ? `${process.env.ADDON_VERSION} (WG-Easy ${process.env.WG_EASY_VERSION || "unknown"})`
+        : undefined,
 };
 
 // ---- broker discovery --------------------------------------------------------

@@ -1,7 +1,8 @@
 ARG BUILD_VERSION
 ARG BUILD_ARCH
 
-# Pinned to an exact upstream release for reproducible builds. The add-on's
+# Pinned to an exact upstream release for reproducible builds. The add-on has its
+# own version (config.yaml); bumping this line is an add-on release too. The add-on's
 # database preparation (addon/prepare-db.mjs) depends on this version's schema
 # and on its migrations; see CHANGELOG.md before bumping.
 FROM ghcr.io/wg-easy/wg-easy:15.5.0

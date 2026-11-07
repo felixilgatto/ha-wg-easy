@@ -1,5 +1,23 @@
 # Changelog
 
+The add-on uses its own [semantic version](https://semver.org) from 1.0.0 on. Each entry names the
+WG-Easy version it bundles. Versions up to 15.5.0 followed WG-Easy's numbering.
+
+## 1.0.0
+
+Bundles **WG-Easy 15.5.0**.
+
+- **New versioning.** The add-on now has its own semantic version, independent of WG-Easy's, so a
+  fix to the add-on no longer has to look like a WG-Easy release. The bundled WG-Easy version is
+  in each changelog entry, in the start-up log, and in the software version of the *WG-Easy VPN*
+  device in Home Assistant.
+  > Home Assistant only notifies updates to a *higher* version, so 15.5.0 → 1.0.0 shows no update
+  > notification. Open the add-on page and click **Update**. Data is kept as usual.
+- **Security: `mqtt` 5.15.2 → 5.16.1**, the library behind the Home Assistant entities. 5.15.2 has
+  six advisories (four high) through which a malicious or misbehaving broker can crash the client
+  or corrupt its state. Exposure was limited: the add-on speaks MQTT 3.1.1, most advisories need
+  MQTT 5, and the broker is normally the local Mosquitto add-on.
+
 ## 15.5.0
 
 - **WG-Easy 15.5.0** (was 15.4.0). It includes Node.js security fixes, see the
