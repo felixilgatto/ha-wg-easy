@@ -22,6 +22,11 @@ Assistant sidebar, already logged in, with every WG-Easy feature available.
 - **Safe defaults.** VPN clients reach Home Assistant only, unless you open your local network. That
   limit is enforced on the server, so editing a client config does not get around it.
 
+## Requirements
+
+Home Assistant OS or Supervised on a 64-bit system (`aarch64` or `amd64`), no other WireGuard server
+on the same host (such as the WireGuard add-on), and a router on which you can forward a UDP port.
+
 ## Install
 
 1. Click the button above, or add the repository by hand:
@@ -34,73 +39,14 @@ Assistant sidebar, already logged in, with every WG-Easy feature available.
 
 That's it. Create a client in the panel and scan its QR code with the WireGuard app.
 
-If your public IP address changes, set a dynamic-DNS name in the panel (**Administration → Config →
-Host**) or in the `host` option.
+By default VPN clients reach Home Assistant only. Add your LAN range (e.g. `192.168.1.0/24`) to the
+`allowed_ips` option to let them reach the rest of your network.
 
-## Options
+## Documentation
 
-All options are optional. Settings you can change in the WG-Easy panel stay there, as with a
-standalone WG-Easy. The settings marked *override* replace the panel's value on every start, but
-only when you fill them in.
-
-| Option | Default | What it does |
-|---|---|---|
-| `host` | detected | *Override.* Public IP or DNS name written into client configs. |
-| `port` | `51820` | UDP port WireGuard listens on. Forward it on your router. |
-| `allowed_ips` | empty | Extra ranges VPN clients may reach, e.g. your LAN `192.168.1.0/24`. See below. |
-| `disable_ipv6` | `true` | IPv6 inside the tunnel. IPv4 is enough to reach a home network. |
-| `home_assistant_entities` | `true` | Publish entities through MQTT when a broker is available. |
-| `dns` | — | *Override.* DNS servers for new clients, comma-separated. |
-| `mtu` | — | *Override.* MTU of the interface and of new clients. |
-| `persistent_keepalive` | — | *Override.* Keepalive interval, in seconds, for new clients. |
-| `ipv4_cidr` / `ipv6_cidr` | — | Tunnel ranges. **First installation only**: afterwards change them in the panel, which renumbers existing clients. |
-| `metrics_port` | — | Serves WG-Easy's Prometheus/JSON metrics on this port of your network. Enable them, and set their token, in the panel. |
-
-## Reaching your local network
-
-By default a VPN client reaches **Home Assistant only**. To let clients reach the rest of your network,
-add its range to `allowed_ips`:
-
-```yaml
-allowed_ips: "192.168.1.0/24"
-```
-
-A connected device then reaches *every* machine on that network (cameras, NAS, admin interfaces) for
-as long as its tunnel is up. A lost phone keeps that reach until you disable its client. The add-on
-prints a warning at every start while the network is open, so this is never silent.
-
-Clients created before a change keep the routing they were created with: edit them in the panel or
-recreate them. The server-side limit itself applies to all clients right away.
-
-## Home Assistant entities
-
-With the official **Mosquitto broker** add-on installed (and the MQTT integration set up), the add-on
-creates:
-
-- a **WG-Easy VPN** device: number of clients, connected clients, and a *Restart interface* button;
-- one device per VPN client: *Enabled* switch, *Connected*, *Received*, *Sent*, *Last handshake*,
-  plus diagnostic *Endpoint*, *IPv4 address* and *Expires*.
-
-Clients you add, rename or delete in the panel follow automatically. Use them in automations: for
-example, get a notification when a client connects, or switch a guest's access off at night.
-
-## Limitations
-
-These come from WG-Easy itself or from Home Assistant OS, and cannot be lifted by the add-on:
-
-- **One-time links do not work.** WG-Easy's "one-time link" lets someone download a config from a
-  URL, but the interface is only reachable through Home Assistant, so the link cannot be opened from
-  outside. Share the QR code or the downloaded config file instead.
-- **No AmneziaWG.** WG-Easy's experimental AmneziaWG mode needs a kernel module that Home Assistant OS
-  does not ship.
-- **OAuth / SSO logins are not used.** Home Assistant does the authentication.
-- **The panel's admin password is managed by the add-on.** If you change it or enable 2FA in the
-  panel, the add-on resets it on the next login so the panel keeps opening. Access control is Home
-  Assistant's: only its administrators can open the panel.
-- **Port forwarding is up to you.** The add-on cannot configure your router. Behind a carrier-grade NAT
-  (the WAN address on your router differs from your public IP), incoming VPN connections cannot work.
-- **Data from add-on versions before 15.4.6 is not recoverable.** Those versions did not store data
-  persistently. Clients created before updating have to be recreated once.
+The full documentation is in [`wg-easy/DOCS.md`](wg-easy/DOCS.md), also shown in the add-on's
+**Documentation** tab: options, reaching your network, Home Assistant entities, data and backups,
+security model, limitations and troubleshooting.
 
 ## Development
 

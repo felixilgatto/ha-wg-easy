@@ -12,5 +12,6 @@ Home Assistant.
 - **VPN clients reach Home Assistant only** by default, enforced on the server. Add your LAN to
   `allowed_ips` to open it.
 
-After installing, forward **UDP port 51820** on your router to Home Assistant. See the
+Needs a 64-bit system and no other WireGuard server (such as the WireGuard add-on) on the same
+host. After installing, forward **UDP port 51820** on your router to Home Assistant. See the
 **Documentation** tab for options, entities and limitations.

@@ -161,6 +161,37 @@ ensure_admin_secret() {
     ADMIN_PASSWORD="$(cat "$ADMIN_SECRET_FILE")"
 }
 
+# ---- an existing wg0 -------------------------------------------------------------
+# With host_network, wg0 lives in the host's network namespace. A previous run
+# that was killed (instead of stopped) can leave it behind, and WG-Easy would
+# then fail to bring it up again, so that one is removed. But wg0 can also belong
+# to something else, typically the WireGuard add-on: deleting it, or filtering
+# its traffic (restrict_client_forwarding matches `-i wg0`), would silently cut
+# off that VPN. The interface is ours only if it runs this installation's server
+# key, which WG-Easy keeps in /etc/wireguard/wg0.conf; otherwise refuse to start.
+handle_existing_wg0() {
+    ip link show wg0 >/dev/null 2>&1 || return 0
+    local live ours=""
+    live="$(wg show wg0 public-key 2>/dev/null || true)"
+    if [ -f /etc/wireguard/wg0.conf ]; then
+        ours="$(sed -n 's/^[[:space:]]*PrivateKey[[:space:]]*=[[:space:]]*//p' /etc/wireguard/wg0.conf \
+            | head -n1 | wg pubkey 2>/dev/null || true)"
+    fi
+    if [ -n "$live" ] && [ "$live" = "$ours" ]; then
+        log "Removing a stale wg0 interface left by a previous run."
+        ip link del wg0 2>/dev/null || true
+        return 0
+    fi
+    log "****************************************************************"
+    log "ERROR: a network interface named wg0 already exists on this host"
+    log "and it is not this add-on's (another WireGuard server, usually the"
+    log "WireGuard add-on, is using it). Running both would break the other"
+    log "VPN, so this add-on does not start. Stop and disable the other"
+    log "WireGuard server, then start this add-on again."
+    log "****************************************************************"
+    exit 1
+}
+
 # ---- IPv4 forwarding -----------------------------------------------------------
 # A packet for ANOTHER host on the LAN must be forwarded from wg0 to the LAN
 # interface, which needs net.ipv4.ip_forward=1. With host_network this is the
@@ -462,13 +493,7 @@ setup_persistence
 protect_database
 ensure_admin_secret
 
-# A previous run that was killed (instead of stopped) can leave wg0 behind in
-# the host's network namespace; WG-Easy would then fail to bring it up again.
-if ip link show wg0 >/dev/null 2>&1; then
-    log "Removing a stale wg0 interface left by a previous run."
-    ip link del wg0 2>/dev/null || true
-fi
-
+handle_existing_wg0
 enable_ipv4_forwarding
 wait_for_network
 prepare_database
