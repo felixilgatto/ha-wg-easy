@@ -24,60 +24,80 @@ exposed on your network.
 5. On your router, forward the **UDP** port you chose (default `51820`) to the machine running Home
    Assistant.
 
-> **Fill in the options before the first start.** WG-Easy stores its configuration the first time it
-> runs, so changing these options afterwards has no effect. Later changes are made in the WG-Easy
-> panel itself.
+> **Fill in `host`, `port`, `username`, `password`, `dns` and the two CIDRs before the first start.**
+> WG-Easy stores these the first time it runs; changing them in the add-on options afterwards has no
+> effect, so change them in the WG-Easy panel instead. `allowed_ips`, `disable_ipv6` and
+> `reset_admin_password` are different: they are applied on **every** start.
 
 ## Options
 
-| Option | Default | What it does |
-|---|---|---|
-| `host` | — | **Required.** Public IP address or hostname your clients connect to. |
-| `port` | `51820` | UDP port of the tunnel. Forward this on your router. |
-| `username` | `admin` | Login for the WG-Easy panel. |
-| `password` | — | **Required.** Twelve characters or more. |
-| `dns` | `1.1.1.1` | DNS server pushed to clients. |
-| `allowed_ips` | `10.8.0.0/24` | What new clients are allowed to route. See below. |
-| `ipv4_cidr` | `10.8.0.0/24` | Address range of the tunnel itself. |
-| `ipv6_cidr` | `fdcc:…` | Unused while IPv6 is disabled. |
-| `disable_ipv6` | `true` | Keep disabled unless you know your network handles IPv6. |
-| `reset_admin_password` | `false` | Set to `true` once to re-apply `password` after changing it. |
+| Option | Default | Applied | What it does |
+|---|---|---|---|
+| `host` | — | first start | **Required.** Public IP address or hostname your clients connect to. |
+| `port` | `51820` | first start | UDP port of the tunnel. Forward this on your router. |
+| `username` | `admin` | first start | Login for the WG-Easy panel. |
+| `password` | — | first start | **Required.** Twelve characters or more. |
+| `dns` | `1.1.1.1` | first start | DNS server pushed to clients. |
+| `allowed_ips` | `10.8.0.0/24` | every start | What clients may reach. See below. |
+| `ipv4_cidr` | `10.8.0.0/24` | first start | Address range of the tunnel itself. |
+| `ipv6_cidr` | `fdcc:…` | first start | Unused while IPv6 is disabled. |
+| `disable_ipv6` | `true` | every start | Keep disabled unless you know your network handles IPv6. |
+| `reset_admin_password` | `false` | every start | See below. |
 
-The address of this Home Assistant host is **always added automatically** to `allowed_ips`, so Home
-Assistant is reachable without you typing its address.
+**`reset_admin_password`:** while it is `true`, the admin password is reset to `password` and two-factor
+authentication is cleared **on every start**. Set it to `true`, restart once, then set it back to
+`false`. Otherwise every restart undoes any password or 2FA you set in the panel.
+
+The tunnel range and the address of this Home Assistant host are added to `allowed_ips` automatically,
+so Home Assistant is reachable without you typing its address. If the add-on cannot find the host's
+address within 30 seconds of starting (no network yet), it logs a `WARNING` and skips it. Restart the
+add-on once the network is up.
 
 ## Reaching your local network
 
-By default a VPN client reaches **Home Assistant only**. To let clients reach the rest of your local
+By default a VPN client can reach **Home Assistant only**. To let clients reach the rest of your local
 network, add your subnet to the same option:
 
 ```yaml
 allowed_ips: "10.8.0.0/24, 192.168.0.0/24"
 ```
 
-**This is a real privilege, and worth a moment's thought.** A connected device then reaches *every*
-machine on that network — cameras, servers and administration interfaces included — for as long as
-the tunnel is up. A lost or compromised phone keeps that reach until you revoke its client.
+`allowed_ips` is enforced **on the server**: the add-on installs a firewall rule that drops any
+traffic from a VPN client to an address outside these ranges. Editing the client's own WireGuard
+config does not get around it. The rule follows the option on every restart and applies to all
+clients, old and new.
 
-The add-on prints a clear warning at startup as soon as the allowed addresses go beyond Home
-Assistant, so this is never opened silently. By default nothing warns, because nothing else is
-reachable.
+**Opening your network is a real privilege, and worth a moment's thought.** A connected device then
+reaches *every* machine on that network — cameras, servers and administration interfaces included —
+for as long as the tunnel is up. A lost or compromised phone keeps that reach until you revoke its
+client.
 
-Clients created **before** a change keep their own setting: adjust an existing client in the WG-Easy
-panel, or delete it and create a new one.
+The add-on prints a clear warning at startup as soon as `allowed_ips` goes beyond the tunnel and Home
+Assistant, so this is never opened silently.
+
+`allowed_ips` also becomes the routing setting in **new** client configs. A client created before you
+widened it still routes only the old ranges: edit it in the WG-Easy panel, or delete and recreate it.
 
 ## Notes
 
-- The web interface is served through Home Assistant's ingress. It is not reachable directly from your
-  network, and no port is published for it.
+- The web interface is served through Home Assistant's ingress. The internal port (`8099`) only
+  accepts connections from the Home Assistant Supervisor, so other machines on your network or VPN
+  cannot open it directly.
 - The WireGuard UDP port must be forwarded on your router. The add-on cannot do that for you.
 - If your connection is behind a carrier-grade NAT, port forwarding cannot work, regardless of this
   add-on. Compare your router's WAN address with the address seen from the internet.
 - Keep your client configurations private: they contain a private key.
 
+Full documentation — how the ingress proxy and network setup work, how to read the startup log, and
+troubleshooting when other machines on your network are unreachable — is in
+[`wg-easy/DOCS.md`](wg-easy/DOCS.md).
+
 ## Credits and licence
 
 This add-on packages the official [WG-Easy](https://github.com/wg-easy/wg-easy) image — the exact
 version is pinned in the `Dockerfile` — and adds the Home Assistant integration around it: the ingress
-panel, the options above, and automatic detection of the network interface to use. WG-Easy is
-licensed separately; see its repository.
+panel, the options above, and automatic detection of the network interface to use.
+
+- Add-on packaging (this repository): [MIT](LICENSE).
+- WG-Easy, which the add-on builds and runs: [AGPL-3.0](https://github.com/wg-easy/wg-easy/blob/master/LICENSE).
+  If you modify and redistribute the add-on, the AGPL terms apply to the WG-Easy part.

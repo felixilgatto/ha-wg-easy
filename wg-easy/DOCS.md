@@ -37,8 +37,29 @@ The add-on therefore does **not** fall back to publishing a LAN port. Instead:
     bodies, `Location` redirect headers and `Set-Cookie` paths.
 
 This keeps absolute asset URLs, the SPA's runtime API calls, redirects and
-cookies all pointing back at the Ingress entry point. The web UI is never
-exposed on a host port.
+cookies all pointing back at the Ingress entry point.
+
+### Who can reach the Ingress port
+
+Because the add-on uses `host_network: true`, the proxy's port (`8099`) listens
+on every host interface — the LAN, `wg0`, the Supervisor network. The
+`X-Ingress-Path` header is not a barrier on its own: any client can send it.
+The proxy therefore also checks the **source address** of every connection and
+accepts only the Supervisor (`172.30.32.2`, the fixed address Home Assistant
+Ingress connects from) and the container's own loopback. Anything else gets a
+`403` (or, for a WebSocket upgrade, a closed connection). The startup log shows
+the accepted sources:
+
+```
+[ingress-proxy] accepting connections only from: 172.30.32.2, 127.0.0.1, ::1
+```
+
+If your Supervisor network is not the default one, set
+`INGRESS_ALLOWED_SOURCES` (comma-separated) in the container environment.
+
+WG-Easy itself runs with `INSECURE=true` (no TLS of its own) and listens only on
+`127.0.0.1`; Home Assistant terminates TLS and has already authenticated the
+user.
 
 ### Networking
 
@@ -115,8 +136,15 @@ Interpretation:
   it — without a matching MASQUERADE rule, replies from other LAN hosts are not
   routed back through the tunnel, which produces exactly the "HA host works,
   other hosts don't" symptom.
-- The `FORWARD` chain has `-i wg0 -j ACCEPT` and `-o wg0 -j ACCEPT` rules (Docker
-  sets the policy to `DROP`), so forwarded tunnel traffic is allowed.
+- The `FORWARD` chain starts with `-i wg0 -j HA_WGEASY_CLIENTS` (the
+  `allowed_ips` filter, see *LAN access* below), followed by WG-Easy's
+  `-i wg0 -j ACCEPT` and `-o wg0 -j ACCEPT` rules (Docker sets the policy to
+  `DROP`). Traffic to a destination in `allowed_ips` passes; anything else from
+  a client is dropped.
+- The log line `Forwarding filter: VPN clients may be forwarded only to: ...`
+  lists the ranges the filter allows. If it printed `WARNING: could not install
+  the IPv4 forwarding filter` instead, `allowed_ips` is **not** enforced on the
+  server.
 
 ### The masquerade device
 
@@ -153,41 +181,66 @@ WG-Easy database **before WG-Easy starts**, every start:
 Nothing in the web UI needs changing, and a reinstall cannot reintroduce the
 defect.
 
-## LAN access: what clients are allowed to route (`allowed_ips`)
+## LAN access: what clients may reach (`allowed_ips`)
 
-Which machines on your home LAN a VPN client can reach is decided by the
-client's own **AllowedIPs** — the set of destinations the client routes into the
-tunnel. In WG-Easy that value comes from the *default* AllowedIPs
-(`user_configs_table.default_allowed_ips`), which is copied into a client when
-the client is created. The add-on's existing `allowed_ips` option sets that
-default — it is the single knob for LAN access.
+`allowed_ips` decides which destinations a VPN client can reach. It does two
+things:
 
-- **Default (`allowed_ips: "10.8.0.0/24"`):** a new client may route only the
-  tunnel subnet, so it can reach **this Home Assistant host and nothing else** on
-  your LAN. The add-on **always adds this host's own LAN address**
-  (`<host-ip>/32`, derived at runtime from the detected LAN device) to the
-  effective value, so Home Assistant is reachable without you having to type your
-  own address.
-- **Open the LAN (`allowed_ips: "10.8.0.0/24, 192.168.0.0/24"`):** add your LAN
-  subnet to the same option. New clients may then route the whole LAN and can
-  reach every machine on it (cameras, NAS, the Proxmox web UI, ...). The add-on
-  logs a **startup WARNING** whenever the effective AllowedIPs go beyond the
-  tunnel subnet and this Home Assistant host, so opening the LAN is never silent.
+1. **It is enforced on the server.** At every start the launcher fills a
+   dedicated netfilter chain, `HA_WGEASY_CLIENTS`, and jumps to it first from
+   `FORWARD` for traffic arriving on `wg0`:
 
-The add-on writes the effective default into WG-Easy's database **before WG-Easy
-starts, on every start** — the same moment and mechanism it uses to fix the
-masquerade device below. The option, not the web UI, owns this default.
+   ```
+   -A FORWARD -i wg0 -j HA_WGEASY_CLIENTS
+   -A HA_WGEASY_CLIENTS -d 10.8.0.0/24 -j RETURN
+   -A HA_WGEASY_CLIENTS -d 192.168.0.15/32 -j RETURN
+   -A HA_WGEASY_CLIENTS -j DROP
+   ```
 
-> **Existing clients are not changed.** This value is only the *default applied
-> when a client is created*; clients that already exist keep their own stored
-> AllowedIPs. Changing `allowed_ips` therefore affects clients created
-> afterwards. To narrow or widen an existing client, edit it in the WG-Easy web
-> UI or delete and recreate it.
+   Traffic to an allowed range returns to `FORWARD` and continues through the
+   rules that were already there (Docker's chains, WG-Easy's own accepts).
+   Everything else from a client is dropped. This applies to **every** client,
+   whatever its own config says: a client's AllowedIPs only decide what the
+   client routes into the tunnel, and the client controls that file, so they are
+   not a security boundary. The chain is flushed and refilled on every start, so
+   a change to `allowed_ips` takes effect at the next restart. Packets addressed
+   to this Home Assistant host itself are not forwarded (they go through
+   `INPUT`), so Home Assistant is always reachable from the tunnel.
+2. **It is the default AllowedIPs for new clients.** The launcher writes it to
+   WG-Easy's `user_configs_table.default_allowed_ips`, which WG-Easy copies into
+   a client's config when the client is created. Clients that already exist keep
+   their own stored AllowedIPs: after widening `allowed_ips`, edit an existing
+   client in the web UI (or recreate it) so it routes the new range.
 
-This is separate from the server-side masquerade: the MASQUERADE rule and IPv4
-forwarding are always installed on the real interface (see below), whatever
-`allowed_ips` is. The barrier that decides which LAN machines a client can reach
-is the client's AllowedIPs, not the masquerade.
+The effective value is always:
+
+- the **tunnel subnet** (`ipv4_cidr`), so clients can reach each other and the
+  server's tunnel address;
+- this host's own LAN address (`<host-ip>/32`), derived from the detected LAN
+  device, so Home Assistant is reachable without you typing its address;
+- every other entry of the `allowed_ips` option.
+
+If you changed `ipv4_cidr` but left `allowed_ips` at its shipped default
+(`10.8.0.0/24`), the old default is replaced by the real tunnel subnet and the
+log says so. No warning fires, and clients are not given a stale range.
+
+The host address needs a default route and an IPv4 address on that device. The
+launcher waits up to 30 seconds for both at startup. If they never appear it
+logs `WARNING: could not determine ...` and leaves the host address out: new
+clients then cannot reach Home Assistant until you restart the add-on with the
+network up.
+
+- **Default (`allowed_ips: "10.8.0.0/24"`):** clients reach **this Home
+  Assistant host and the tunnel, nothing else**. The log prints
+  `allowed_ips is restricted: ...`.
+- **Open the LAN (`allowed_ips: "10.8.0.0/24, 192.168.0.0/24"`):** clients may
+  reach every machine on that subnet (cameras, NAS, the Proxmox web UI, ...).
+  The add-on logs a **startup WARNING** naming the extra ranges, so opening the
+  LAN is never silent.
+
+The MASQUERADE rule and IPv4 forwarding are always installed on the real
+interface (see above), whatever `allowed_ips` is. They make LAN routing
+*possible*; the `HA_WGEASY_CLIENTS` filter decides what is *allowed*.
 
 ## Options and the "first run only" caveat
 
@@ -200,10 +253,10 @@ Consequently:
 
 - On the **first start**, all options are applied: `host`, `port`, `username`,
   `password`, `dns`, `ipv4_cidr`, `ipv6_cidr`.
-- `allowed_ips` (the default AllowedIPs for new clients) is applied on **every**
-  start: the launcher writes the effective value into WG-Easy's database before
-  startup (see *LAN access* above). Changing the option takes effect for new
-  clients on the next restart, and never changes clients that already exist.
+- `allowed_ips` is applied on **every** start: the server-side filter is
+  refilled for all clients, and the default for new clients is rewritten in
+  WG-Easy's database (see *LAN access* above). Existing clients' own configs
+  are not changed.
 - `disable_ipv6` (default `true`) is read on **every** start and simply enables
   or disables IPv6 in the generated WireGuard config. It is left `true` by
   default because IPv4 is enough to reach a home LAN and it keeps the first-run
@@ -212,9 +265,10 @@ Consequently:
 - On **later starts**, the stored `host`, `port`, `dns` and CIDRs are kept. To
   change them afterwards, edit them in the WG-Easy web UI (Settings). Changing
   the add-on options for these fields will have no effect.
-- The admin **password** can be re-applied from the option by setting
-  `reset_admin_password: true` once (it is reset on the next start, then set it
-  back to `false`). This also clears 2FA.
+- The admin **password** can be re-applied from the option with
+  `reset_admin_password: true`. While the option is `true`, the password is
+  reset and 2FA is cleared on **every** start, so set it back to `false` after
+  one restart.
 
 > The password must be **at least 12 characters**, otherwise WG-Easy rejects it.
 
@@ -251,8 +305,11 @@ report the `nf_tables` backend, the WireGuard interface came up
 `POSTROUTING ... MASQUERADE` rule installed, the web UI answered through an
 Ingress-style prefixed proxy (and refused requests without the Ingress header), a
 client was created, and a real WireGuard handshake with a second container was
-observed, with the client able to reach a host on the LAN behind the server. See
-the repository README for the raw evidence.
+observed, with the client able to reach a host on the LAN behind the server.
+For `15.4.1` the `iptables`/`ip6tables` backend switch was checked in the
+built image, and the read-only-`/proc/sys` failure path of the forwarding call
+was reproduced directly (a container write returns `Read-only file system`,
+exit 1, and the effective value is unchanged).
 
 For `15.4.2` the launcher was additionally built and run on x86_64 Docker: the
 forwarding call runs before WG-Easy and is idempotent, the `---- network state
@@ -309,6 +366,23 @@ for an opened LAN:
   MASQUERADE`, i.e. the masquerade stays aligned with the real interface whatever
   `allowed_ips` is.
 
+For `15.4.5` the built image was run on x86_64 Docker in an isolated container
+network (`--cap-add NET_ADMIN`):
+
+- with `allowed_ips: "10.8.0.0/24, <A>/32"` the launcher installed
+  `-A FORWARD -i wg0 -j HA_WGEASY_CLIENTS` ahead of WG-Easy's own
+  `-i wg0 -j ACCEPT`, with `RETURN` rules for `10.8.0.0/24`, `<A>/32` and the
+  host's `/32`, then `DROP`;
+- a real WireGuard peer whose own config routed both `<A>` and a second host
+  `<B>` reached the server's tunnel address and `<A>`, while its traffic to
+  `<B>` was dropped by the chain (packet counters confirmed it);
+- a restart left exactly one jump rule and one copy of the chain (idempotent);
+- a request to the proxy from outside the container, with a forged
+  `X-Ingress-Path` header, got `403`, and a forged WebSocket upgrade was
+  closed. The same request from the container's loopback was served;
+- with `ipv4_cidr: "10.9.0.0/24"` and `allowed_ips` left at its default, the
+  effective value became `10.9.0.0/24, <host>/32` and no LAN warning fired.
+
 > **The Home Assistant OS proof is the owner's device.** The local host kernel
 > exposes both netfilter backends, its `/proc/sys` is writable on the host, and
 > its LAN device name (`ens18`) is not the Pi's (`end0`), so the local host
@@ -325,4 +399,8 @@ for an opened LAN:
 >   `LAN device (default route)`, with the `OK:` line (no `NOTE` line);
 > - `[add-on] Default AllowedIPs for new clients set to: 10.8.0.0/24, <host-ip>/32`
 >   followed by the `allowed_ips is restricted:` line — or the LAN `WARNING:`
->   block if you added your subnet to `allowed_ips`.
+>   block if you added your subnet to `allowed_ips`;
+> - `[add-on] Forwarding filter: VPN clients may be forwarded only to: ...`
+>   (and no `could not install the IPv4 forwarding filter` warning);
+> - `[ingress-proxy] accepting connections only from: 172.30.32.2, ...`, with
+>   the WG-Easy panel still opening from the Home Assistant sidebar.

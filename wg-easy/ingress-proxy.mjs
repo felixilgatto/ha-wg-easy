@@ -23,6 +23,32 @@ const UPSTREAM_HOST = process.env.WEB_HOST || '127.0.0.1';
 const UPSTREAM_PORT = parseInt(process.env.WEB_PORT || '51821', 10);
 const BASE = process.env.APP_BASE || '/_haingress';
 
+// Home Assistant Ingress always reaches the add-on from the Supervisor, whose
+// address on the internal `hassio` network is fixed: 172.30.32.2. The add-on
+// runs with host_network, so this port listens on every host interface (LAN,
+// wg0, ...). The X-Ingress-Path header alone is NOT a barrier - any client can
+// send it - so connections are filtered by SOURCE ADDRESS: only the Supervisor
+// (and the container's own loopback, for local diagnostics) may talk to the web
+// UI. A TCP source address cannot be spoofed across a completed handshake.
+// Override with INGRESS_ALLOWED_SOURCES (comma-separated) only if your
+// Supervisor network differs.
+const ALLOWED_SOURCES = new Set(
+  (process.env.INGRESS_ALLOWED_SOURCES || '172.30.32.2,127.0.0.1,::1')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
+);
+
+function normaliseAddress(addr) {
+  if (!addr) return '';
+  // IPv4 clients on a dual-stack socket appear as ::ffff:a.b.c.d
+  return addr.startsWith('::ffff:') ? addr.slice(7) : addr;
+}
+
+function sourceAllowed(socket) {
+  return ALLOWED_SOURCES.has(normaliseAddress(socket && socket.remoteAddress));
+}
+
 const TEXT_TYPE = /(?:^text\/|application\/(?:json|javascript|xml|xhtml\+xml|ecmascript)|application\/x-javascript|\+json)/i;
 
 function stripIngressPath(url, ingressPath) {
@@ -58,11 +84,10 @@ function upstreamHeaders(req) {
 
 const server = http.createServer((req, res) => {
   const ingressPath = req.headers['x-ingress-path'] || '';
-  // Home Assistant Ingress always sets X-Ingress-Path. The add-on runs with
-  // host_network, so this port is technically reachable on the host's LAN
-  // interfaces; refuse anything that did not come through Ingress so the web
-  // UI is never exposed as a plain LAN port.
-  if (!ingressPath) {
+  // Refuse anything that did not come from the Supervisor (see ALLOWED_SOURCES)
+  // or that lacks the Ingress header, so the web UI is never usable as a plain
+  // LAN or VPN port.
+  if (!sourceAllowed(req.socket) || !ingressPath) {
     res.writeHead(403, { 'content-type': 'text/plain' });
     res.end('This add-on web UI is only reachable through Home Assistant Ingress.\n');
     return;
@@ -109,7 +134,7 @@ const server = http.createServer((req, res) => {
 // WebSocket / HTTP upgrade passthrough (wg-easy live updates).
 server.on('upgrade', (req, socket, head) => {
   const ingressPath = req.headers['x-ingress-path'] || '';
-  if (!ingressPath) {
+  if (!sourceAllowed(socket) || !ingressPath) {
     socket.destroy();
     return;
   }
@@ -137,4 +162,5 @@ server.on('upgrade', (req, socket, head) => {
 
 server.listen(LISTEN_PORT, '0.0.0.0', () => {
   console.log(`[ingress-proxy] listening on 0.0.0.0:${LISTEN_PORT} -> ${UPSTREAM_HOST}:${UPSTREAM_PORT}${BASE}`);
+  console.log(`[ingress-proxy] accepting connections only from: ${[...ALLOWED_SOURCES].join(', ')}`);
 });

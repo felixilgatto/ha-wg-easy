@@ -29,8 +29,10 @@ WG_PORT="$(get_default port 51820)"
 WG_USERNAME="$(get_default username admin)"
 WG_PASSWORD="$(get password)"
 WG_DNS="$(get_default dns 1.1.1.1)"
-WG_ALLOWED_IPS="$(get_default allowed_ips 10.8.0.0/24)"
-WG_IPV4_CIDR="$(get_default ipv4_cidr 10.8.0.0/24)"
+# Shipped default of the allowed_ips / ipv4_cidr options (see config.yaml).
+SHIPPED_TUNNEL_CIDR="10.8.0.0/24"
+WG_ALLOWED_IPS="$(get_default allowed_ips "$SHIPPED_TUNNEL_CIDR")"
+WG_IPV4_CIDR="$(get_default ipv4_cidr "$SHIPPED_TUNNEL_CIDR")"
 WG_IPV6_CIDR="$(get_default ipv6_cidr fdcc:ad94:bacf:61a4::/64)"
 DISABLE_IPV6_OPT="$(jq -r '.disable_ipv6 // true' "$OPTIONS")"
 RESET_ADMIN_PW="$(jq -r '.reset_admin_password // false' "$OPTIONS")"
@@ -79,9 +81,9 @@ mkdir -p /etc/wireguard
 #
 # NOTE: forwarding and the MASQUERADE rule are kept in place *always*, whatever
 # `allowed_ips` is. They are not the barrier that decides which LAN machines a
-# client can reach - that barrier is the client's own AllowedIPs. Leaving them
-# installed keeps the masquerade aligned with the real interface at all times
-# and avoids any dependence on a client-side setting.
+# client can reach. That barrier is the server-side forwarding filter installed
+# by restrict_client_forwarding() below, which enforces `allowed_ips` for every
+# client regardless of what the client's own config says.
 enable_ipv4_forwarding() {
     local before after
     before="$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null || echo '?')"
@@ -202,8 +204,7 @@ lan_device_address() {
 # EXTRA_ALLOWED_IPS for the startup warning.
 derive_allowed_ips() {
     local dev="$1" host_cidr host_addr host_slash32
-    local result="$WG_ALLOWED_IPS"
-    local found_host=no p extra="" parts
+    local result="" p extra="" parts
 
     if [ -n "$dev" ]; then
         host_cidr="$(lan_device_address "$dev")"
@@ -221,17 +222,29 @@ derive_allowed_ips() {
         echo "[add-on] default AllowedIPs automatically."
     fi
 
+    # The tunnel subnet (ipv4_cidr) and this host are always part of the
+    # effective value. If the user changed ipv4_cidr but left allowed_ips at its
+    # shipped default, that default is the OLD tunnel range: replace it with the
+    # real one instead of handing clients (and flagging) a stale range.
+    if [ "$(trim "$WG_ALLOWED_IPS")" = "$SHIPPED_TUNNEL_CIDR" ] \
+        && [ "$WG_IPV4_CIDR" != "$SHIPPED_TUNNEL_CIDR" ]; then
+        echo "[add-on] allowed_ips is the shipped default ($SHIPPED_TUNNEL_CIDR) but"
+        echo "[add-on] ipv4_cidr is $WG_IPV4_CIDR: using the tunnel subnet $WG_IPV4_CIDR."
+        WG_ALLOWED_IPS="$WG_IPV4_CIDR"
+    fi
+
+    result="$WG_IPV4_CIDR"
     IFS=',' read -ra parts <<< "$WG_ALLOWED_IPS"
     for p in "${parts[@]}"; do
         p="$(trim "$p")"
         [ -z "$p" ] && continue
-        [ -n "${host_slash32:-}" ] && [ "$p" = "$host_slash32" ] && found_host=yes
         [ "$p" = "$WG_IPV4_CIDR" ] && continue
         [ -n "${host_slash32:-}" ] && [ "$p" = "$host_slash32" ] && continue
+        result="$result, $p"
         extra="$extra $p"
     done
 
-    if [ -n "${host_slash32:-}" ] && [ "$found_host" = no ]; then
+    if [ -n "${host_slash32:-}" ]; then
         result="$result, $host_slash32"
     fi
 
@@ -247,8 +260,19 @@ derive_allowed_ips() {
 # no-op, and the UPDATEs are idempotent. If the device cannot be determined we
 # keep WG-Easy's stored device (current behaviour) rather than fail.
 configure_wg_easy_device() {
-    local dev
-    dev="$(detect_lan_device)"
+    local dev i
+    # The network may not be fully up yet when the add-on starts (no DHCP lease,
+    # no default route). Wait up to 30 s for a default route whose device has a
+    # global IPv4 address, so this host's address can be added to the clients'
+    # AllowedIPs. If it never appears we carry on with a WARNING.
+    for i in $(seq 1 30); do
+        dev="$(detect_lan_device)"
+        if [ -n "$dev" ] && [ -n "$(lan_device_address "$dev")" ]; then
+            break
+        fi
+        [ "$i" = 1 ] && echo "[add-on] Waiting for the network (default route + IPv4 address)..."
+        sleep 1
+    done
     if [ -z "$dev" ]; then
         echo "[add-on] WARNING: could not determine the LAN device (no default"
         echo "[add-on] route yet). Keeping WG-Easy's stored device, which may be"
@@ -264,6 +288,74 @@ configure_wg_easy_device() {
     else
         echo "[add-on] WARNING: could not update the WG-Easy database."
         echo "[add-on] Keeping current behaviour; LAN routing may not work."
+    fi
+}
+
+# ---- enforce allowed_ips on the server -----------------------------------
+# A client's own AllowedIPs only decide what the CLIENT routes into the tunnel;
+# the client controls that file, so it is not a security boundary. This
+# installs a forwarding filter in the host's netfilter (shared with the host via
+# host_network) so that traffic arriving from wg0 is only forwarded to the
+# destinations in the effective allowed IPs. Anything else is dropped,
+# whatever the client's config says.
+#
+#   FORWARD:            -i wg0 -j HA_WGEASY_CLIENTS   (inserted at position 1)
+#   HA_WGEASY_CLIENTS:  -d <allowed range> -j RETURN  (one per range)
+#                       -j DROP
+#
+# RETURN (not ACCEPT) hands allowed traffic back to the FORWARD chain, so the
+# rules that already follow (Docker's chains, WG-Easy's own `-i wg0 -j ACCEPT`)
+# apply exactly as before. Traffic addressed to this host itself goes through
+# INPUT, not FORWARD, so Home Assistant stays reachable.
+#
+# The rules live in the host's network namespace and survive add-on restarts,
+# so the setup is idempotent: the chain is flushed and refilled, and the jump is
+# removed and re-inserted, on every start. The match is by interface name, so it
+# can be installed before WG-Easy creates wg0.
+CLIENT_CHAIN="HA_WGEASY_CLIENTS"
+install_client_filter() {
+    # $1 = iptables | ip6tables, rest = destination ranges
+    local ipt="$1" r
+    shift
+    "$ipt" -N "$CLIENT_CHAIN" 2>/dev/null || true
+    "$ipt" -F "$CLIENT_CHAIN" || return 1
+    for r in "$@"; do
+        "$ipt" -A "$CLIENT_CHAIN" -d "$r" -j RETURN || return 1
+    done
+    "$ipt" -A "$CLIENT_CHAIN" -j DROP || return 1
+    while "$ipt" -D FORWARD -i wg0 -j "$CLIENT_CHAIN" 2>/dev/null; do :; done
+    "$ipt" -I FORWARD 1 -i wg0 -j "$CLIENT_CHAIN" || return 1
+}
+
+restrict_client_forwarding() {
+    local p parts v4=() v6=()
+    IFS=',' read -ra parts <<< "$EFFECTIVE_ALLOWED_IPS"
+    for p in "${parts[@]}"; do
+        p="$(trim "$p")"
+        [ -z "$p" ] && continue
+        case "$p" in
+            *:*) v6+=("$p") ;;
+            *) v4+=("$p") ;;
+        esac
+    done
+
+    if install_client_filter iptables "${v4[@]}"; then
+        echo "[add-on] Forwarding filter: VPN clients may be forwarded only to: ${v4[*]:-nothing}"
+    else
+        echo "[add-on] ****************************************************************"
+        echo "[add-on] WARNING: could not install the IPv4 forwarding filter (see the"
+        echo "[add-on] error above). allowed_ips is then NOT enforced on the server:"
+        echo "[add-on] a client that edits its own AllowedIPs can reach the whole LAN."
+        echo "[add-on] ****************************************************************"
+    fi
+
+    if [ "$DISABLE_IPV6_OPT" != "true" ]; then
+        if install_client_filter ip6tables "${v6[@]}"; then
+            echo "[add-on] Forwarding filter (IPv6): clients may be forwarded only to: ${v6[*]:-nothing}"
+        else
+            echo "[add-on] WARNING: could not install the IPv6 forwarding filter;"
+            echo "[add-on] allowed_ips is NOT enforced for IPv6 traffic."
+        fi
     fi
 }
 
@@ -300,12 +392,14 @@ enable_ipv4_forwarding
 DB_PREEXISTING=no
 if [ -f "$DB" ]; then DB_PREEXISTING=yes; fi
 configure_wg_easy_device
+restrict_client_forwarding
 warn_if_lan_reachable
 
 # ---- wg-easy environment -------------------------------------------------
-# Web UI listens only on the loopback inside the container; the ingress proxy
-# is the only thing exposed. INSECURE=true because HA Ingress terminates the
-# (already authenticated) connection; the port is never published to the LAN.
+# Web UI listens only on the loopback; the ingress proxy is the only way in, and
+# it accepts connections only from the Supervisor's address (see
+# ingress-proxy.mjs). INSECURE=true because HA Ingress terminates TLS and has
+# already authenticated the Home Assistant user.
 export PORT="$WEB_PORT"
 export HOST="127.0.0.1"
 export INSECURE=true

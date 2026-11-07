@@ -1,7 +1,9 @@
 ARG BUILD_VERSION
 ARG BUILD_ARCH
 
-# Pinned to the exact upstream release. See README.md for why 15.4.0.
+# Pinned to an exact upstream release for reproducible builds. The add-on's
+# database fix-ups (fix-lan-device.mjs) depend on this version's schema; see
+# CHANGELOG.md before bumping.
 FROM ghcr.io/wg-easy/wg-easy:15.4.0
 
 # jq is needed to read /data/options.json (this image has no bashio).

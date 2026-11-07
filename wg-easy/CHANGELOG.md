@@ -1,5 +1,48 @@
 # Changelog
 
+## 15.4.5
+
+- **Security: the web UI port now accepts connections only from the Home
+  Assistant Supervisor.** With `host_network: true` the Ingress proxy listens on
+  every host interface, and its only check was the `X-Ingress-Path` header,
+  which any client can send. Any machine on the LAN, and any VPN client, could
+  open the WG-Easy login on `http://<ha-ip>:8099/` and try passwords against it.
+  The proxy now also checks the source address and accepts only `172.30.32.2`
+  (the Supervisor, where Ingress connects from) and the container's loopback.
+  Everything else gets `403`, and WebSocket upgrades are closed. Override with
+  `INGRESS_ALLOWED_SOURCES` if your Supervisor network differs.
+- **Security: `allowed_ips` is now enforced on the server.** Until now it only
+  set the AllowedIPs written into *new* client configs, and the server forwarded
+  and NATed anything a client sent. A client that added `192.168.0.0/24` to its
+  own config (or a stolen device whose config was edited) reached the whole LAN,
+  and no warning was logged. The launcher now installs a `HA_WGEASY_CLIENTS`
+  chain, jumped to first from `FORWARD` for traffic from `wg0`, that lets
+  through only destinations in the effective `allowed_ips` and drops the rest.
+  It is refilled on every start and applies to **all** clients, existing ones
+  included. Allowed traffic continues to WG-Easy's own rules unchanged.
+  **Behaviour change:** an existing client whose own config routes more than
+  `allowed_ips` (for example one created before `15.4.4` with
+  `0.0.0.0/0, ::/0`) loses that extra reach. Add the ranges it needs to
+  `allowed_ips`.
+- The tunnel subnet (`ipv4_cidr`) is now always part of the effective
+  `allowed_ips`. If `ipv4_cidr` was changed but `allowed_ips` left at its
+  shipped default `10.8.0.0/24`, the stale default is replaced by the real
+  tunnel subnet. Before, clients were handed the old range and the LAN warning
+  fired wrongly.
+- At startup the launcher now waits up to 30 seconds for a default route and an
+  IPv4 address, so this host's address is not skipped when the add-on starts
+  before the network is up.
+- Docs: README, the add-on store page and DOCS.md now agree. They state which
+  options apply on every start, that `reset_admin_password` must be set back to
+  `false`, the licences, and where the verification evidence lives. The store
+  page no longer suggests `0.0.0.0/0, ::/0`.
+- Still embeds WG-Easy `15.4.0` (`ghcr.io/wg-easy/wg-easy:15.4.0`).
+
+> Verified locally on x86_64 Docker (not Home Assistant OS): a real WireGuard
+> peer that routed an extra host in its own config was blocked from it by the
+> new chain while still reaching the allowed host; a forged-header request from
+> outside the container got `403`. See DOCS.md (*Verified*).
+
 ## 15.4.4
 
 - **LAN access is now opt-in: by default a VPN client reaches only this Home
@@ -122,7 +165,7 @@
 > and printed `OK:` again (idempotent, no loop). With no default route the
 > `WARNING` fallback fired and WG-Easy's stored `eth0` was left in place. **The
 > Home Assistant OS proof — and the Pi's real interface name (`end0`) — cannot
-> be reproduced here**; see DOCS.md and README.md.
+> be reproduced here**; see DOCS.md (*Verified*).
 
 ## 15.4.2
 
@@ -162,7 +205,7 @@
 > network-state block prints, and `wg0` comes up with the MASQUERADE/FORWARD
 > rules installed. The local host kernel exposes both netfilter backends and its
 > `/proc/sys` is writable, so it cannot reproduce the HAOS-only behaviour. **The
-> Home Assistant OS proof is the owner's Raspberry Pi** — see README.md.
+> Home Assistant OS proof is the owner's Raspberry Pi** — see DOCS.md (*Verified*).
 
 ## 15.4.1
 
@@ -192,7 +235,7 @@
 > `nf_tables` backend and that the full add-on starts, brings up `wg0` and
 > installs the `MASQUERADE` rule. **The Home Assistant OS proof is the owner's
 > Raspberry Pi** — the local host kernel exposes both netfilter backends, so it
-> cannot reproduce the HAOS-only failure. See README.md.
+> cannot reproduce the HAOS-only failure. See DOCS.md (*Verified*).
 
 ## 15.4.0
 - Initial release. Embeds WG-Easy `15.4.0` (`ghcr.io/wg-easy/wg-easy:15.4.0`).
