@@ -17,6 +17,9 @@ set -euo pipefail
 OPTIONS=/data/options.json
 ADDON=/app/server/addon
 ADDON_VERSION="${ADDON_VERSION:-unknown}"
+# The add-on has its own semver; the WG-Easy version it bundles is read from the
+# image itself so it can never drift from what actually runs.
+WG_EASY_VERSION="$(jq -r '.version // "unknown"' /app/server/package.json 2>/dev/null || echo unknown)"
 
 log() { echo "[add-on] $*"; }
 opt() {
@@ -61,7 +64,7 @@ TUNNEL_CIDR=""
 EFFECTIVE_ALLOWED_IPS=""   # tunnel + extras + this host: enforced and given to new clients
 EXTRA_ALLOWED_IPS=""       # what goes beyond the tunnel and this host (drives the warning)
 
-log "WG-Easy add-on ${ADDON_VERSION} starting."
+log "WG-Easy add-on ${ADDON_VERSION} (WG-Easy ${WG_EASY_VERSION}) starting."
 
 # ---- persistent storage ------------------------------------------------------
 # Supervisor recreates the add-on container on every start, restart and update,
@@ -489,7 +492,7 @@ export DISABLE_VERSION_CHECK=true
 # Credentials of the managed admin account, for the proxy and the bridge.
 export ADDON_ADMIN_USERNAME="$ADMIN_USERNAME"
 export ADDON_ADMIN_PASSWORD="$ADMIN_PASSWORD"
-export WEB_PORT APP_BASE ADDON_VERSION
+export WEB_PORT APP_BASE ADDON_VERSION WG_EASY_VERSION
 
 cd /app
 node server/index.mjs &

@@ -1,8 +1,9 @@
 # Dependabot version updates. Each PR runs the full CI, smoke test included.
 #
-# A WG-Easy bump (docker) is not releasable on its own: also raise `version` in
-# wg-easy/config.yaml (otherwise Home Assistant offers no update), add a
-# CHANGELOG entry, and check the release for new database migrations, which
+# A Dependabot PR does not reach users on its own: also raise the add-on's own
+# semver `version` in wg-easy/config.yaml (otherwise Home Assistant offers no
+# update) and add a CHANGELOG entry naming the bundled WG-Easy version. For a
+# WG-Easy bump, also check the release for new database migrations, which
 # wg-easy/addon/prepare-db.mjs runs before WG-Easy starts.
 version: 2
 updates:

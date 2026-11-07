@@ -120,7 +120,7 @@ Clients added, renamed or deleted in the panel are reflected within seconds.
 - **OAuth / SSO** logins are not used: Home Assistant does the authentication.
 - **Port forwarding** must be done on your router. Behind a carrier-grade NAT, incoming VPN connections
   cannot work.
-- **Versions before 15.4.6** did not store data persistently. Clients created with them have to be
+- **Add-on versions before 15.4.6** did not store data persistently. Clients created with them have to be
   recreated once.
 
 ## Troubleshooting

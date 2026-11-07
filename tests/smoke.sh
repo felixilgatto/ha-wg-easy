@@ -86,6 +86,7 @@ section "fresh install, no option filled in"
 options '{"host":"","port":51820,"allowed_ips":"","disable_ipv6":true,"home_assistant_entities":true}'
 check "add-on starts and the panel is logged in automatically" start
 check "no setup wizard: first-start configuration created" grep -q "First start: creating" <(logs)
+check "start-up log names the add-on and the bundled WG-Easy version" grep -qE "WG-Easy add-on .+ \(WG-Easy [0-9]+\.[0-9]+\.[0-9]+\) starting" <(logs)
 check "page renders with ingress-rewritten asset URLs" grep -q "hassio_ingress/T/_nuxt" <(px GET /)
 check "/login goes straight to the panel" grep -q "^302 /api/hassio_ingress/T" <(px GET /login)
 check "wg0 is up" docker exec "$ADDON" ip link show wg0
@@ -103,6 +104,7 @@ check "create a client through the panel" grep -q '"success":true' <(px POST /ap
 sleep 4
 check "switch discovered in Home Assistant" grep -q '"command_topic":"wg_easy/client/1/set"' <(mqtt_get 'homeassistant/switch/wg_easy/client_1_enabled/config')
 check "server sensors discovered" grep -q 'Connected clients' <(mqtt_get 'homeassistant/sensor/wg_easy/server_connected_clients/config')
+check "HA device shows the WG-Easy version" grep -qE '"sw_version":"[^"]+ \(WG-Easy [0-9.]+\)"' <(mqtt_get 'homeassistant/sensor/wg_easy/server_clients/config')
 check "client state published" grep -q '"enabled":true' <(mqtt_get 'wg_easy/client/1')
 docker exec "$MQTT" mosquitto_pub -h localhost -t wg_easy/client/1/set -m OFF
 sleep 3
