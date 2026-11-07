@@ -482,6 +482,10 @@ export HOST="127.0.0.1"
 export INSECURE=true
 export NUXT_APP_BASE_URL="$APP_BASE"
 export DISABLE_IPV6="$DISABLE_IPV6_OPT"
+# WG-Easy's "update available" banner tells you to update its container, which
+# add-on users cannot do: the WG-Easy version is pinned by the add-on (see the
+# Dockerfile) and new versions arrive as add-on updates. Hide it.
+export DISABLE_VERSION_CHECK=true
 # Credentials of the managed admin account, for the proxy and the bridge.
 export ADDON_ADMIN_USERNAME="$ADMIN_USERNAME"
 export ADDON_ADMIN_PASSWORD="$ADMIN_PASSWORD"

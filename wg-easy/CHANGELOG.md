@@ -1,5 +1,21 @@
 # Changelog
 
+## 15.5.0
+
+- **WG-Easy 15.5.0** (was 15.4.0). It includes Node.js security fixes, see the
+  [WG-Easy release notes](https://github.com/wg-easy/wg-easy/releases/tag/v15.5.0). It also adds
+  AmneziaWG 3.1 support (still opt-in upstream, not enabled by the add-on) and a configurable
+  interface name (left at `wg0`).
+- **No more "There is an update available!" banner** in the panel. It told you to update WG-Easy's
+  container, which is not possible in an add-on: the WG-Easy version is pinned by the add-on and new
+  versions arrive as add-on updates. The add-on now sets WG-Easy's `DISABLE_VERSION_CHECK`.
+- Upgrading keeps everything. WG-Easy's two new database migrations (new columns, and hooks using
+  `{{interface}}` instead of a hard-coded `wg0`) run after the usual pre-start snapshot.
+
+> Verified in Docker: an add-on started with 15.4.6 and then updated to 15.5.0 on the same `/data`
+> kept its clients and server key, applied the migrations, kept the masquerade on the real LAN
+> device, and reported `updateAvailable: false`. `tests/smoke.sh` passes on the 15.5.0 image.
+
 ## 15.4.6
 
 The add-on now works as installed, keeps its data, and integrates with Home Assistant.

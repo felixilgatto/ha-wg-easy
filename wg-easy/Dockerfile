@@ -4,7 +4,7 @@ ARG BUILD_ARCH
 # Pinned to an exact upstream release for reproducible builds. The add-on's
 # database preparation (addon/prepare-db.mjs) depends on this version's schema
 # and on its migrations; see CHANGELOG.md before bumping.
-FROM ghcr.io/wg-easy/wg-easy:15.4.0
+FROM ghcr.io/wg-easy/wg-easy:15.5.0
 
 # Build args declared before FROM are not visible after it; re-declare them so
 # the labels and ADDON_VERSION below actually get a value.

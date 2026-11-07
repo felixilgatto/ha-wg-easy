@@ -1,5 +1,5 @@
 name: "WG-Easy VPN"
-version: "15.4.6"
+version: "15.5.0"
 slug: "wg-easy"
 description: >-
   WireGuard VPN server with the WG-Easy web interface, as a Home Assistant
