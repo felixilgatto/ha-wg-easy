@@ -1,5 +1,17 @@
 # WG-Easy VPN
 
+## Requirements
+
+- **Home Assistant OS or Supervised**, the installations that have add-ons. Home Assistant
+  Container and Core cannot run add-ons.
+- **A 64-bit system** (`aarch64` or `amd64`). On a Raspberry Pi, that means the 64-bit Home Assistant
+  OS image.
+- **No other WireGuard server on the same host**, such as the WireGuard add-on. Both would use the
+  `wg0` interface and UDP port 51820. If another one already holds `wg0`, this add-on does not start and
+  says why in its log. Stop and disable the other one first.
+- A router on which you can forward a UDP port, and a public IP address (not behind carrier-grade
+  NAT).
+
 ## Getting started
 
 1. Start the add-on. On its first start it detects your public IP address and sets WG-Easy up: there
@@ -12,6 +24,9 @@
 
 If your public IP address is not fixed, set a dynamic-DNS name as the host: in the panel
 (**Administration → Config**) or with the `host` option.
+
+To detect your public address, the first start asks `api.ipify.org`, then `ipv4.icanhazip.com` and
+`ifconfig.me` if that fails. It does this only once, and never when `host` is filled in.
 
 Everything else (DNS, MTU, keepalive, allowed IPs per client, expiry dates, hooks, extra users,
 metrics) is set in the panel, exactly as in a standalone WG-Easy.
@@ -26,11 +41,16 @@ Public IP address or DNS name that clients connect to. When empty, the address d
 start is used and you can change it in the panel. When filled in, it replaces the panel's value on
 every start.
 
+Changing it, here or in the panel, only changes configs downloaded *afterwards*. Devices you already
+set up keep the old address: scan their QR code again or import their new config file.
+
 ### `port`
 
 UDP port WireGuard listens on (default `51820`). It is applied on every start. The public port
 written into client configs follows it, unless you changed that one in the panel (for a router that
 maps a different external port).
+
+As with `host`, devices already set up keep the old port until you import their config again.
 
 ### `allowed_ips`
 
@@ -72,8 +92,8 @@ and nothing else is. Enable the metrics, and set a bearer token, in the panel
 
 ## Home Assistant entities
 
-Install the official **Mosquitto broker** add-on and set up the **MQTT** integration. On its next
-start this add-on picks up the broker by itself.
+Install the official **Mosquitto broker** add-on and set up the **MQTT** integration, then
+**restart this add-on**: it looks for the broker only when it starts, and picks it up by itself.
 
 | Device | Entity | Type |
 |---|---|---|
@@ -87,6 +107,25 @@ start this add-on picks up the broker by itself.
 
 Clients added, renamed or deleted in the panel are reflected within seconds.
 
+Each client's device is named **VPN \<client name\>**, so a client called `phone` gives entity IDs
+such as `switch.vpn_phone_enabled`, `binary_sensor.vpn_phone_connected` and
+`sensor.vpn_phone_last_handshake`. Server entities start with `wg_easy_vpn_`, e.g.
+`sensor.wg_easy_vpn_connected_clients`. Check the exact IDs under **Settings → Devices & services →
+MQTT**, because Home Assistant adapts them to the name and you can rename them.
+
+Example: a notification when the phone connects.
+
+```yaml
+triggers:
+  - trigger: state
+    entity_id: binary_sensor.vpn_phone_connected
+    to: "on"
+actions:
+  - action: notify.notify
+    data:
+      message: "The phone is connected to the VPN."
+```
+
 ## Data, updates and backups
 
 - Everything (server keys, clients, users, settings) is stored in the add-on's persistent `/data`
@@ -99,6 +138,10 @@ Clients added, renamed or deleted in the panel are reflected within seconds.
   snapshot is restored. Without any valid snapshot the add-on refuses to start rather than create an
   empty database, because an empty database would get new server keys and break every client.
 - Stopping the add-on shuts WG-Easy down cleanly: the database is closed and the tunnel is removed.
+- **Uninstalling the add-on deletes `/data`**, and with it the server keys and every client. Make a Home
+  Assistant backup that includes this add-on first if you may want them back. Restoring it, on the same
+  machine or a new one, brings everything back and existing devices keep working. On a new machine,
+  move the router's port forwarding to it, and update `host` if its public address is different.
 
 ## Security model
 
@@ -131,13 +174,28 @@ The **Log** tab tells you what happened at start-up:
 - `Forwarding filter: VPN clients may be forwarded only to: …`: what clients can reach.
 - `---- network state ----`: whether `wg0` is up and whether the NAT rule sits on the right network
   interface.
-- `No MQTT broker available`: install Mosquitto to get entities.
+- `could not detect the public address`: client configs then use the local address of Home
+  Assistant, which only works inside your network. Set your public IP or DDNS name.
+- `a network interface named wg0 already exists`: another WireGuard server runs on this host. See
+  Requirements.
+- `No MQTT broker available`: install Mosquitto, then restart this add-on, to get entities.
 
 **Clients connect but nothing answers.** Check the router's port forwarding (UDP), and that your WAN
 address is your public address (no carrier-grade NAT).
 
+**A device stopped connecting after changing `host` or `port`.** Import its config again (QR code
+or file): devices keep the address and port they were set up with.
+
 **Home Assistant is reachable but other machines are not.** That is the default. Add your LAN range
 to `allowed_ips`, then edit or recreate the client so it routes that range.
+
+## Versions
+
+The add-on has its own [semantic version](https://semver.org), starting at 1.0.0: **major** for a
+change you must act on, **minor** for new features or a new WG-Easy minor version, **patch** for
+fixes, security updates or a new WG-Easy patch version. Each entry of the **Changelog** tab names the
+WG-Easy version it bundles, and the start-up log shows both. Versions up to 15.5.0 followed
+WG-Easy's numbering.
 
 ## How it works
 

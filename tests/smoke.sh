@@ -13,7 +13,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 IMAGE="${1:-}"
 P=wgsmoke                  # prefix of every docker object created here
-NET="$P-net"; VOL="$P-data"; ADDON="$P-addon"; MQTT="$P-mqtt"
+NET="$P-net"; VOL="$P-data"; ADDON="$P-addon"; MQTT="$P-mqtt"; NETNS="$P-netns"
 FAILS=0
 # Helper images, pinned so the test does not change under our feet.
 ALPINE=alpine:3.22
@@ -35,7 +35,7 @@ check() { local what="$1"; shift; if "$@" >/dev/null 2>&1; then pass "$what"; el
 section() { printf '\n== %s\n' "$*"; }
 
 cleanup() {
-    docker rm -f "$ADDON" "$MQTT" >/dev/null 2>&1 || true
+    docker rm -f "$ADDON" "$MQTT" "$NETNS" >/dev/null 2>&1 || true
     docker network rm "$NET" >/dev/null 2>&1 || true
     docker volume rm -f "$VOL" >/dev/null 2>&1 || true
 }
@@ -151,9 +151,39 @@ docker run --rm -v "$VOL:/data" "$ALPINE" sh -c 'rm -f /data/wireguard/wg-easy.d
 check "restart with a damaged database" start
 check "damaged database detected and a snapshot restored" grep -q "Restored the newest valid snapshot" <(logs)
 
+section "an existing wg0 is only removed when it is this add-on's"
+# A helper container owns a network namespace with a wg0 in it, standing in for
+# the host's namespace (host_network). The add-on then joins that namespace.
+docker stop "$ADDON" >/dev/null
+wg0_owner() {  # $1 = shell snippet that configures wg0
+    docker rm -f "$NETNS" "$ADDON" >/dev/null 2>&1 || true
+    docker run -d --name "$NETNS" --network "$NET" --cap-add NET_ADMIN -v "$VOL:/data" \
+        --entrypoint sh "$IMAGE" -c "ip link add wg0 type wireguard && $1 && exec sleep 600" >/dev/null
+    for _ in $(seq 1 10); do docker exec "$NETNS" ip link show wg0 >/dev/null 2>&1 && return 0; sleep 1; done
+    return 1
+}
+run_in_netns() {
+    docker run -d --name "$ADDON" --network "container:$NETNS" --cap-add NET_ADMIN \
+        -e MQTT_URL="mqtt://$MQTT:1883" -v "$VOL:/data" "$IMAGE" >/dev/null
+}
+wg0_owner 'wg genkey > /tmp/k && wg set wg0 private-key /tmp/k'
+run_in_netns
+sleep 8
+check "add-on refuses to start next to another WireGuard server's wg0" \
+    test "$(docker inspect -f '{{.State.Running}} {{.State.ExitCode}}' "$ADDON")" = "false 1"
+check "explains why" grep -q "is not this add-on's" <(logs)
+check "the other wg0 is left untouched" docker exec "$NETNS" ip link show wg0
+check "the other VPN's traffic is not filtered" sh -c "! docker exec $NETNS iptables -S FORWARD | grep -q HA_WGEASY_CLIENTS"
+wg0_owner 'wg-quick strip /data/wireguard/wg0.conf > /tmp/c && wg setconf wg0 /tmp/c'
+run_in_netns
+sleep 15
+check "a wg0 left by a killed run of this add-on is removed" grep -q "Removing a stale wg0" <(logs)
+check "and the add-on starts" grep -q "^200" <(px GET /api/session)
+docker rm -f "$ADDON" "$NETNS" >/dev/null
+
 section "no MQTT broker"
 docker stop "$MQTT" >/dev/null
-docker rm -f "$ADDON" >/dev/null
+docker rm -f "$ADDON" >/dev/null 2>&1 || true
 docker run -d --name "$ADDON" --network "$NET" --cap-add NET_ADMIN -v "$VOL:/data" "$IMAGE" >/dev/null
 sleep 12
 check "add-on runs without a broker" grep -q "^200" <(px GET /api/session)

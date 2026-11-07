@@ -3,6 +3,19 @@
 The add-on uses its own [semantic version](https://semver.org) from 1.0.0 on. Each entry names the
 WG-Easy version it bundles. Versions up to 15.5.0 followed WG-Easy's numbering.
 
+## 1.0.1
+
+Bundles **WG-Easy 15.5.0**.
+
+- **No longer breaks another WireGuard server on the same host.** At start-up the add-on removed any
+  existing `wg0` interface, assuming a previous run had left it behind. With `host_network`, that could
+  be the WireGuard add-on's tunnel. Now it removes `wg0` only when it runs this add-on's own server
+  key. Otherwise it refuses to start, says why in the log, and leaves the other VPN alone.
+- Documentation: requirements (installation type, 64-bit, no other WireGuard server), re-importing
+  client configs after changing `host` or `port`, how public-address detection works, entity IDs and
+  an automation example, what uninstalling deletes, and moving to a new machine. The repository README
+  now links to the add-on documentation instead of repeating it.
+
 ## 1.0.0
 
 Bundles **WG-Easy 15.5.0**.
