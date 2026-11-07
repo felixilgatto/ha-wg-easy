@@ -1,14 +1,57 @@
-name: "WG-Easy VPN"
-description: "WireGuard VPN server with the WG-Easy web interface, exposed as a Home Assistant sidebar panel via Ingress. By default VPN clients reach only this Home Assistant host; add your LAN subnet to allowed_ips to reach the whole home LAN."
 configuration:
-  allowed_ips:
-    name: "Allowed IPs"
+  host:
+    name: "Public host"
     description: >-
-      Which machines VPN clients may reach. Enforced on the server for every
-      client on each start, and used as the AllowedIPs of NEW clients. The
-      tunnel subnet only (default) means a client reaches this Home Assistant
-      host and nothing else on the LAN. Add your LAN subnet (e.g. 192.168.0.0/24)
-      to let clients reach every machine on your home LAN. The tunnel subnet and
-      this host's own LAN address are always added automatically. Existing
-      clients keep their own routing setting; to widen one, edit it in the web
-      UI or recreate it.
+      Public IP address or DNS name that VPN clients connect to. Leave empty to
+      use the address detected on the first start (editable in the WG-Easy
+      panel). When filled in, it replaces the panel's value on every start.
+  port:
+    name: "WireGuard port (UDP)"
+    description: >-
+      UDP port WireGuard listens on. Forward this port on your router to Home
+      Assistant.
+  allowed_ips:
+    name: "Allowed networks"
+    description: >-
+      Extra ranges VPN clients may reach, comma-separated (e.g. your LAN
+      192.168.1.0/24). Empty means Home Assistant only. Enforced on the server
+      for every client, and used as the routing of new clients.
+  disable_ipv6:
+    name: "Disable IPv6"
+    description: >-
+      Disable IPv6 inside the tunnel. IPv4 is enough to reach a home network.
+  home_assistant_entities:
+    name: "Home Assistant entities"
+    description: >-
+      Create entities for the VPN and each client through MQTT, when the
+      Mosquitto broker add-on is installed.
+  dns:
+    name: "DNS servers (override)"
+    description: >-
+      DNS servers given to new clients, comma-separated. Leave empty to manage
+      them in the WG-Easy panel.
+  mtu:
+    name: "MTU (override)"
+    description: >-
+      MTU of the interface and of new clients. Leave empty to manage it in the
+      WG-Easy panel.
+  persistent_keepalive:
+    name: "Persistent keepalive (override)"
+    description: >-
+      Keepalive interval in seconds for new clients (0 = off). Leave empty to
+      manage it in the WG-Easy panel.
+  ipv4_cidr:
+    name: "Tunnel IPv4 range (first installation only)"
+    description: >-
+      Used only on the very first start. Afterwards, change it in the WG-Easy
+      panel, which also renumbers existing clients.
+  ipv6_cidr:
+    name: "Tunnel IPv6 range (first installation only)"
+    description: >-
+      Used only on the very first start. Afterwards, change it in the WG-Easy
+      panel.
+  metrics_port:
+    name: "Metrics port"
+    description: >-
+      Serve WG-Easy's Prometheus and JSON metrics on this port of your network.
+      Enable them, and set a token, in the WG-Easy panel.

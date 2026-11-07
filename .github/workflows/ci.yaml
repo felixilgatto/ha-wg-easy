@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Home Assistant app lint
+        uses: frenck/action-addon-linter@v2.21
+        with:
+          path: "./wg-easy"
+
+      - name: ShellCheck
+        run: shellcheck -S warning wg-easy/run.sh tests/smoke.sh
+
+      - name: Node syntax check
+        run: for f in wg-easy/addon/*.mjs; do node --check "$f"; done
+
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+          - arch: aarch64
+            platform: linux/arm64
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        if: matrix.arch != 'amd64'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        run: |
+          docker buildx build --load --platform "${{ matrix.platform }}" \
+            --build-arg BUILD_VERSION=ci --build-arg BUILD_ARCH="${{ matrix.arch }}" \
+            -t "wgeasy-addon:${{ matrix.arch }}" wg-easy
+
+      # End-to-end test (persistence, auto-login, MQTT entities, recovery, ...).
+      # Runs on the native architecture only: WireGuard needs the runner's kernel.
+      - name: Smoke test
+        if: matrix.arch == 'amd64'
+        run: tests/smoke.sh "wgeasy-addon:${{ matrix.arch }}"

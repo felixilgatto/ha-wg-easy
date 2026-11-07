@@ -2,9 +2,15 @@ ARG BUILD_VERSION
 ARG BUILD_ARCH
 
 # Pinned to an exact upstream release for reproducible builds. The add-on's
-# database fix-ups (fix-lan-device.mjs) depend on this version's schema; see
-# CHANGELOG.md before bumping.
+# database preparation (addon/prepare-db.mjs) depends on this version's schema
+# and on its migrations; see CHANGELOG.md before bumping.
 FROM ghcr.io/wg-easy/wg-easy:15.4.0
+
+# Build args declared before FROM are not visible after it; re-declare them so
+# the labels and ADDON_VERSION below actually get a value.
+ARG BUILD_VERSION
+ARG BUILD_ARCH
+ENV ADDON_VERSION="${BUILD_VERSION}"
 
 # jq is needed to read /data/options.json (this image has no bashio).
 RUN apk add --no-cache jq
@@ -43,10 +49,30 @@ RUN set -eux; \
     iptables --version | grep -q 'nf_tables'; \
     ip6tables --version | grep -q 'nf_tables'
 
+# ---- Persistent storage ------------------------------------------------------
+# Only /data survives the container being recreated (which Supervisor does on
+# every start, restart and update). WG-Easy keeps its whole state in
+# /etc/wireguard, so point that at /data/wireguard. run.sh creates the target.
+RUN rm -rf /etc/wireguard && ln -s /data/wireguard /etc/wireguard
+
+# ---- Add-on layer --------------------------------------------------------------
+# The add-on's Node scripts live in /app/server/addon so that they resolve
+# WG-Easy's own modules (@libsql/client, drizzle) from /app/server/node_modules,
+# i.e. the exact driver and SQLite build the app uses. Their only extra
+# dependency (mqtt, for Home Assistant entities) is pinned by package-lock.json.
+COPY addon/package.json addon/package-lock.json /app/server/addon/
+RUN cd /app/server/addon && npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
+    && npm cache clean --force
+COPY addon/*.mjs /app/server/addon/
 COPY run.sh /run.sh
-COPY ingress-proxy.mjs /ingress-proxy.mjs
-COPY fix-lan-device.mjs /app/server/fix-lan-device.mjs
-RUN chmod a+x /run.sh
+RUN chmod a+x /run.sh \
+    && node --check /app/server/addon/ingress-proxy.mjs \
+    && node --check /app/server/addon/ha-bridge.mjs
+
+# The Supervisor restarts the add-on when it turns unhealthy: WG-Easy must
+# answer behind the proxy and the WireGuard interface must exist.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+  CMD wget -q -O /dev/null http://127.0.0.1:8099/_addon/health || exit 1
 
 LABEL \
   io.hass.version="${BUILD_VERSION}" \
