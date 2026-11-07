@@ -38,7 +38,10 @@ RUN apk add --no-cache jq
 # it. NOTE: `update-alternatives --set` alone fails here
 # ("alternative ... not registered"), so we `--install` first.
 #
-# The trailing version checks fail the build if the switch did not take effect.
+# The trailing checks fail the build if the switch did not take effect. They
+# resolve the command links instead of running `iptables --version`: the nft
+# backend opens a netlink socket even for --version, which fails when the image
+# is cross-built under QEMU ("Failed to initialize nft: Protocol not supported").
 RUN set -eux; \
     update-alternatives --install /usr/sbin/iptables iptables /usr/sbin/iptables-nft 30 \
         --slave /usr/sbin/iptables-restore iptables-restore /usr/sbin/iptables-nft-restore \
@@ -46,8 +49,8 @@ RUN set -eux; \
     update-alternatives --install /usr/sbin/ip6tables ip6tables /usr/sbin/ip6tables-nft 30 \
         --slave /usr/sbin/ip6tables-restore ip6tables-restore /usr/sbin/ip6tables-nft-restore \
         --slave /usr/sbin/ip6tables-save ip6tables-save /usr/sbin/ip6tables-nft-save; \
-    iptables --version | grep -q 'nf_tables'; \
-    ip6tables --version | grep -q 'nf_tables'
+    readlink -f /usr/sbin/iptables | grep -q 'xtables-nft-multi$'; \
+    readlink -f /usr/sbin/ip6tables | grep -q 'xtables-nft-multi$'
 
 # ---- Persistent storage ------------------------------------------------------
 # Only /data survives the container being recreated (which Supervisor does on

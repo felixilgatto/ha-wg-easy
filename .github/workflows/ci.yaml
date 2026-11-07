@@ -60,6 +60,12 @@ jobs:
 
       # End-to-end test (persistence, auto-login, MQTT entities, recovery, ...).
       # Runs on the native architecture only: WireGuard needs the runner's kernel.
+      # The add-on cannot load kernel modules (no SYS_MODULE, like on HAOS),
+      # so load what WireGuard and the nftables backend need on the runner.
+      - name: Load kernel modules
+        if: matrix.arch == 'amd64'
+        run: sudo modprobe -a wireguard nf_tables nft_nat nft_compat
+
       - name: Smoke test
         if: matrix.arch == 'amd64'
         run: tests/smoke.sh "wgeasy-addon:${{ matrix.arch }}"

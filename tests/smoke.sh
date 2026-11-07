@@ -17,7 +17,16 @@ NET="$P-net"; VOL="$P-data"; ADDON="$P-addon"; MQTT="$P-mqtt"
 FAILS=0
 
 pass() { printf '  \033[32mok\033[0m   %s\n' "$*"; }
-fail() { printf '  \033[31mFAIL\033[0m %s\n' "$*"; FAILS=$((FAILS + 1)); }
+fail() {
+    printf '  \033[31mFAIL\033[0m %s\n' "$*"
+    FAILS=$((FAILS + 1))
+    # Show the add-on log once, at the first failure, where it explains most.
+    if [ "$FAILS" -eq 1 ]; then
+        echo "  ---- add-on log at first failure (last 60 lines) ----"
+        docker logs "$ADDON" 2>&1 | tail -n 60 | sed 's/^/  | /'
+        echo "  ---- end of add-on log ----"
+    fi
+}
 check() { local what="$1"; shift; if "$@" >/dev/null 2>&1; then pass "$what"; else fail "$what"; fi; }
 section() { printf '\n== %s\n' "$*"; }
 
