@@ -15,6 +15,10 @@ IMAGE="${1:-}"
 P=wgsmoke                  # prefix of every docker object created here
 NET="$P-net"; VOL="$P-data"; ADDON="$P-addon"; MQTT="$P-mqtt"
 FAILS=0
+# Helper images, pinned so the test does not change under our feet.
+ALPINE=alpine:3.22
+CURL=curlimages/curl:8.16.0
+MOSQUITTO=eclipse-mosquitto:2.0.22
 
 pass() { printf '  \033[32mok\033[0m   %s\n' "$*"; }
 fail() {
@@ -45,10 +49,10 @@ fi
 
 docker network create "$NET" >/dev/null
 docker volume create "$VOL" >/dev/null
-docker run -d --name "$MQTT" --network "$NET" eclipse-mosquitto:2 \
+docker run -d --name "$MQTT" --network "$NET" "$MOSQUITTO" \
     sh -c 'printf "listener 1883\nallow_anonymous true\n" > /tmp/m.conf; exec mosquitto -c /tmp/m.conf' >/dev/null
 
-options() { docker run --rm -i -v "$VOL:/data" alpine sh -c "cat > /data/options.json" <<< "$1"; }
+options() { docker run --rm -i -v "$VOL:/data" "$ALPINE" sh -c "cat > /data/options.json" <<< "$1"; }
 start() {
     docker rm -f "$ADDON" >/dev/null 2>&1 || true
     docker run -d --name "$ADDON" --network "$NET" --cap-add NET_ADMIN \
@@ -91,7 +95,7 @@ check "health endpoint reports healthy" docker exec "$ADDON" wget -q -O /dev/nul
 
 section "source filter"
 check "a request with a forged Ingress header from the network is refused" \
-    grep -q "403" <(docker run --rm --network "$NET" curlimages/curl -s -o /dev/null -w '%{http_code}' \
+    grep -q "403" <(docker run --rm --network "$NET" "$CURL" -s -o /dev/null -w '%{http_code}' \
         -H 'X-Ingress-Path: /api/hassio_ingress/x' "http://$ADDON:8099/api/session")
 
 section "clients and Home Assistant entities"
@@ -141,7 +145,7 @@ check "the API is NOT served on the metrics port" docker exec "$ADDON" sh -c '! 
 section "Home Assistant backup hook + corruption recovery"
 check "backup_pre snapshot works while running" docker exec "$ADDON" node /app/server/addon/db-tool.mjs snapshot /data/wireguard/wg-easy.db /data/backups/ha-backup.db
 docker stop "$ADDON" >/dev/null
-docker run --rm -v "$VOL:/data" alpine sh -c 'rm -f /data/wireguard/wg-easy.db-wal /data/wireguard/wg-easy.db-shm; dd if=/dev/urandom of=/data/wireguard/wg-easy.db bs=1024 seek=4 count=20 conv=notrunc 2>/dev/null'
+docker run --rm -v "$VOL:/data" "$ALPINE" sh -c 'rm -f /data/wireguard/wg-easy.db-wal /data/wireguard/wg-easy.db-shm; dd if=/dev/urandom of=/data/wireguard/wg-easy.db bs=1024 seek=4 count=20 conv=notrunc 2>/dev/null'
 check "restart with a damaged database" start
 check "damaged database detected and a snapshot restored" grep -q "Restored the newest valid snapshot" <(logs)
 
