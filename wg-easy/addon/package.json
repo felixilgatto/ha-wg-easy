@@ -4,6 +4,6 @@
   "description": "Home Assistant integration layer around WG-Easy (ingress proxy, database safety, MQTT entities).",
   "type": "module",
   "dependencies": {
-    "mqtt": "5.15.2"
+    "mqtt": "5.16.1"
   }
 }
