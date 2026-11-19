@@ -387,7 +387,7 @@ option_changed() {
     [ "$(applied "$1")" != "$2" ]
 }
 prepare_database() {
-    local state apply db_allowed panel_allowed old_ip new_list
+    local state db_allowed panel_allowed old_ip new_list
     local key_allowed key_dns writes='{}'
     if ! state="$(node "$ADDON/prepare-db.mjs" inspect)"; then
         log "ERROR: could not open or migrate the WG-Easy database (see above)."
