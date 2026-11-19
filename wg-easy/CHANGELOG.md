@@ -3,6 +3,19 @@
 The add-on uses its own [semantic version](https://semver.org) from 1.0.0 on. Each entry names the
 WG-Easy version it bundles. Versions up to 15.5.0 followed WG-Easy's numbering.
 
+## 1.0.2
+
+Bundles **WG-Easy 15.5.0**.
+
+- **Settings changed in the panel are kept after a restart.** The add-on wrote its options into
+  WG-Easy on every start, so **Allowed IPs** and the **listen port** set in the panel (and DNS, MTU,
+  keepalive or host, when those options were filled in) went back to the option's value at each
+  restart. Now an option is written into the panel only on the first start and when you change
+  it; the latest change wins, whether made in the panel or in the options.
+- **The server-side firewall follows the panel's Allowed IPs** (plus the tunnel and this host),
+  updated at each start. Restart the add-on after widening Allowed IPs in the panel.
+- Nothing to do when updating: the current values are kept.
+
 ## 1.0.1
 
 Bundles **WG-Easy 15.5.0**.

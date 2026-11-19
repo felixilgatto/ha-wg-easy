@@ -35,20 +35,26 @@ metrics) is set in the panel, exactly as in a standalone WG-Easy.
 
 Every option is optional.
 
+**The panel keeps what you set in it.** An option is written into the panel on the first start, and
+again only when you change the option. Otherwise a restart keeps the panel's values: change the
+allowed IPs, port, DNS, etc. in the panel or in the options, whichever you prefer. The latest change
+wins.
+
 ### `host`
 
 Public IP address or DNS name that clients connect to. When empty, the address detected on the first
-start is used and you can change it in the panel. When filled in, it replaces the panel's value on
-every start.
+start is used and you can change it in the panel. When you fill it in or change it, it replaces the
+panel's value at the next start.
 
 Changing it, here or in the panel, only changes configs downloaded *afterwards*. Devices you already
 set up keep the old address: scan their QR code again or import their new config file.
 
 ### `port`
 
-UDP port WireGuard listens on (default `51820`). It is applied on every start. The public port
-written into client configs follows it, unless you changed that one in the panel (for a router that
-maps a different external port).
+UDP port WireGuard listens on (default `51820`). It is written into the panel when you change it;
+a port changed in the panel is kept across restarts. The public port written into client configs
+follows it, unless you changed that one in the panel (for a router that maps a different external
+port). Forward the port actually in use on your router.
 
 As with `host`, devices already set up keep the old port until you import their config again.
 
@@ -57,10 +63,15 @@ As with `host`, devices already set up keep the old port until you import their 
 Extra address ranges VPN clients may reach, comma-separated, e.g. `192.168.1.0/24`. The tunnel and
 this Home Assistant host are always included, so **empty means "Home Assistant only"**.
 
-The add-on enforces this on the server, for all clients, with a firewall rule that drops anything
-else. A client cannot get around it by editing its own config. It is also the default routing of new
-clients. Existing clients keep the routing they were created with, so edit or recreate them after
-widening it.
+When you change this option, it is written into the panel's **Allowed IPs** (Administration →
+Config), with the tunnel and this host. You can also edit that list directly in the panel: it is
+kept across restarts.
+
+The add-on enforces the panel's **Allowed IPs** (plus the tunnel and this host) on the server, for all
+clients, with a firewall rule that drops anything else. A client cannot get around it by editing its
+own config. The rule is updated at each start, so **restart the add-on after editing Allowed IPs in
+the panel**. The list is also the default routing of new clients. Existing clients keep the routing
+they were created with, so edit or recreate them after widening it.
 
 Opening your LAN gives every connected device access to every machine on it. The add-on prints a
 warning at each start while it is open.
@@ -75,9 +86,9 @@ Publish Home Assistant entities through MQTT when a broker is available (default
 
 ### `dns`, `mtu`, `persistent_keepalive`
 
-Optional overrides of the panel's values, applied on every start when filled in: DNS servers of new
-clients (comma-separated), MTU of the interface and of new clients, and keepalive of new clients (in
-seconds, `0` = off).
+Optional: written into the panel when you fill them in or change them: DNS servers of new clients
+(comma-separated), MTU of the interface and of new clients, and keepalive of new clients (in seconds,
+`0` = off). Emptying one leaves the panel's value as it is.
 
 ### `ipv4_cidr`, `ipv6_cidr`
 
@@ -153,7 +164,7 @@ actions:
 - WG-Easy's own admin account is managed by the add-on with a random password stored in `/data`. It is
   re-applied automatically if it stops working, for example after it was changed or 2FA was enabled
   in the panel.
-- VPN clients only reach what `allowed_ips` permits, enforced on the server.
+- VPN clients only reach the panel's **Allowed IPs** (set by `allowed_ips`), enforced on the server.
 
 ## Limitations
 
@@ -187,7 +198,8 @@ address is your public address (no carrier-grade NAT).
 or file): devices keep the address and port they were set up with.
 
 **Home Assistant is reachable but other machines are not.** That is the default. Add your LAN range
-to `allowed_ips`, then edit or recreate the client so it routes that range.
+to `allowed_ips` (or to **Allowed IPs** in the panel, then restart the add-on), then edit or recreate
+the client so it routes that range.
 
 ## Versions
 
@@ -207,5 +219,5 @@ WG-Easy's numbering.
   kernel provides. WG-Easy's NAT rule is pointed at the real LAN interface on every start; WG-Easy
   assumes `eth0`, which is wrong on most Home Assistant hosts.
 - **Database.** Before WG-Easy starts, the add-on checks and snapshots its SQLite database, runs
-  WG-Easy's migrations, and writes the values it manages (LAN device, allowed IPs, and the overrides
-  you filled in).
+  WG-Easy's migrations, and writes the LAN device plus the options you changed since the last start
+  (remembered in `/data/.applied_options.json`). Everything else stays as set in the panel.

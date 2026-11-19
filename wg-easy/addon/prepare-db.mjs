@@ -8,11 +8,14 @@
 //       Runs WG-Easy's own migrations (a fresh install gets a fully seeded
 //       database; an existing one is upgraded or left as is) and prints the
 //       current state as JSON on stdout:
-//       { setupDone, ipv4Cidr, ipv6Cidr, host, port, adminUsername }
+//       { setupDone, ipv4Cidr, ipv6Cidr, listenPort, host, port,
+//         defaultAllowedIps, adminUsername }
 //
 //   node prepare-db.mjs apply '<json>'
 //       Writes the values the add-on manages. Every key is optional; a missing
-//       key leaves WG-Easy's stored value (i.e. whatever the web UI set) alone:
+//       key leaves WG-Easy's stored value (i.e. whatever the web UI set) alone.
+//       run.sh only passes an option when it was just changed (or on the very
+//       first start), so that what is set in the panel survives restarts:
 //         device            LAN device for the MASQUERADE rule. WG-Easy seeds
 //                           'eth0', which is wrong on most HAOS hosts.
 //         defaultAllowedIps AllowedIPs copied into NEW clients.
@@ -53,7 +56,14 @@ try {
     if (cmd === "inspect") {
         const general = await one("SELECT setup_step FROM general_table WHERE id = 1");
         const iface = await one("SELECT ipv4_cidr, ipv6_cidr, port FROM interfaces_table WHERE name = 'wg0'");
-        const uc = await one("SELECT host, port FROM user_configs_table WHERE id = 'wg0'");
+        const uc = await one("SELECT host, port, default_allowed_ips FROM user_configs_table WHERE id = 'wg0'");
+        let defaultAllowedIps = null;
+        try {
+            const parsed = JSON.parse(uc?.default_allowed_ips ?? "null");
+            if (Array.isArray(parsed)) defaultAllowedIps = parsed.map(String);
+        } catch {
+            log("WARNING: unreadable default AllowedIPs in the database; ignored.");
+        }
         const admin = await one("SELECT username FROM users_table WHERE id = 1");
         process.stdout.write(
             JSON.stringify({
@@ -64,6 +74,7 @@ try {
                 listenPort: iface ? Number(iface.port) : null,
                 host: uc?.host ?? null,
                 port: uc ? Number(uc.port) : null,
+                defaultAllowedIps,
                 adminUsername: admin?.username ?? null,
             }) + "\n",
         );

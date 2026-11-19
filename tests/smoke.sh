@@ -144,6 +144,22 @@ check "LAN subnet enforced in the forwarding filter" docker exec "$ADDON" iptabl
 check "Prometheus metrics served on the metrics port" docker exec "$ADDON" sh -c 'wget -qO- http://127.0.0.1:9586/metrics/prometheus | grep -q wireguard_configured_peers'
 check "the API is NOT served on the metrics port" docker exec "$ADDON" sh -c '! wget -qO- http://127.0.0.1:9586/api/client'
 
+section "settings changed in the panel survive a restart"
+# GET a panel endpoint, transform its JSON with jq, POST it back.
+panel_edit() { px POST "$1" "$(px GET "$1" | cut -d' ' -f3- | jq -c "$2")" >/dev/null; }
+panel_get() { px GET "$1" | cut -d' ' -f3- | jq -r "$2"; }
+panel_edit /api/admin/userconfig '.defaultAllowedIps += ["10.20.0.0/16"]'
+panel_edit /api/admin/interface '.port = 51888'
+check "restart with unchanged options" start
+check "panel Allowed IPs kept" grep -q "10.20.0.0/16" <(panel_get /api/admin/userconfig '.defaultAllowedIps[]')
+check "panel listen port kept" docker exec "$ADDON" grep -q "ListenPort = 51888" /etc/wireguard/wg0.conf
+check "panel Allowed IPs enforced in the forwarding filter" docker exec "$ADDON" iptables -C HA_WGEASY_CLIENTS -d 10.20.0.0/16 -j RETURN
+options '{"host":"vpn.example.org","port":51999,"allowed_ips":"192.168.60.0/24","disable_ipv6":true,"home_assistant_entities":true,"dns":"9.9.9.9","mtu":1380,"persistent_keepalive":25,"metrics_port":9586}'
+check "restart after changing the allowed_ips option" start
+check "changed option written to the panel" grep -q "192.168.60.0/24" <(panel_get /api/admin/userconfig '.defaultAllowedIps[]')
+check "and replaces the panel's previous ranges" sh -c "! docker exec $ADDON iptables -C HA_WGEASY_CLIENTS -d 10.20.0.0/16 -j RETURN"
+check "unchanged port option leaves the panel's port" docker exec "$ADDON" grep -q "ListenPort = 51888" /etc/wireguard/wg0.conf
+
 section "Home Assistant backup hook + corruption recovery"
 check "backup_pre snapshot works while running" docker exec "$ADDON" node /app/server/addon/db-tool.mjs snapshot /data/wireguard/wg-easy.db /data/backups/ha-backup.db
 docker stop "$ADDON" >/dev/null
