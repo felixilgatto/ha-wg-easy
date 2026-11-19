@@ -4,18 +4,22 @@ configuration:
     description: >-
       Public IP address or DNS name that VPN clients connect to. Leave empty to
       use the address detected on the first start (editable in the WG-Easy
-      panel). When filled in, it replaces the panel's value on every start.
+      panel). When filled in or changed, it replaces the panel's value at the
+      next start.
   port:
     name: "WireGuard port (UDP)"
     description: >-
       UDP port WireGuard listens on. Forward this port on your router to Home
-      Assistant.
+      Assistant. Written into the panel when changed; a port set in the panel
+      is kept.
   allowed_ips:
     name: "Allowed networks"
     description: >-
       Extra ranges VPN clients may reach, comma-separated (e.g. your LAN
-      192.168.1.0/24). Empty means Home Assistant only. Enforced on the server
-      for every client, and used as the routing of new clients.
+      192.168.1.0/24). Empty means Home Assistant only. Written into the
+      panel's Allowed IPs when changed; the panel's list is kept across
+      restarts, enforced on the server for every client, and used as the
+      routing of new clients.
   disable_ipv6:
     name: "Disable IPv6"
     description: >-

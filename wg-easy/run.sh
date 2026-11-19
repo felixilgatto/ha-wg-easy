@@ -56,13 +56,17 @@ BACKUP_DIR=/data/backups
 KEEP_BACKUPS=10
 DB="$PERSIST_DIR/wg-easy.db"
 ADMIN_SECRET_FILE=/data/.admin_password
+# Option values as last written into WG-Easy's database (see apply rule below).
+APPLIED_FILE=/data/.applied_options.json
 
 # Filled in below.
 LAN_DEV=""
 HOST_LAN_IP=""
 TUNNEL_CIDR=""
-EFFECTIVE_ALLOWED_IPS=""   # tunnel + extras + this host: enforced and given to new clients
+EFFECTIVE_ALLOWED_IPS=""   # tunnel + panel's allowed IPs + this host: enforced on the server
 EXTRA_ALLOWED_IPS=""       # what goes beyond the tunnel and this host (drives the warning)
+APPLIED='{}'               # content of APPLIED_FILE
+HAVE_APPLIED=false
 
 log "WG-Easy add-on ${ADDON_VERSION} (WG-Easy ${WG_EASY_VERSION}) starting."
 
@@ -248,23 +252,15 @@ wait_for_network() {
 }
 
 # ---- allowed IPs ---------------------------------------------------------------
-# What VPN clients may reach: the tunnel subnet, this Home Assistant host, and
-# whatever the `allowed_ips` option adds (e.g. the LAN subnet). The result is
-# both ENFORCED on the server (restrict_client_forwarding) and written as the
-# default AllowedIPs of NEW clients.
-derive_allowed_ips() {
-    local p parts extra="" result allowed="$OPT_ALLOWED_IPS" host32=""
+# What VPN clients may reach: the tunnel subnet, this Home Assistant host, and the
+# ranges of the given list (the panel's "Allowed IPs", which the `allowed_ips`
+# option sets when it is changed). The result is ENFORCED on the server
+# (restrict_client_forwarding).
+merge_allowed_ips() {
+    local p parts extra="" result host32=""
     [ -n "$HOST_LAN_IP" ] && host32="$HOST_LAN_IP/32"
-
-    # The old shipped default of this option was the tunnel range 10.8.0.0/24;
-    # if the tunnel was moved elsewhere, that saved value is stale, not a
-    # deliberate extra range.
-    if [ "$(trim "$allowed")" = "$SHIPPED_TUNNEL_CIDR" ] && [ "$TUNNEL_CIDR" != "$SHIPPED_TUNNEL_CIDR" ]; then
-        allowed=""
-    fi
-
     result="$TUNNEL_CIDR"
-    IFS=',' read -ra parts <<< "$allowed"
+    IFS=',' read -ra parts <<< "$1"
     for p in "${parts[@]}"; do
         p="$(trim "$p")"
         [ -z "$p" ] && continue
@@ -274,9 +270,20 @@ derive_allowed_ips() {
         extra="$extra $p"
     done
     [ -n "$host32" ] && result="$result, $host32"
-
     EFFECTIVE_ALLOWED_IPS="$result"
     EXTRA_ALLOWED_IPS="$(trim "$extra")"
+}
+
+# The `allowed_ips` option, as written into the panel: tunnel + option + host.
+option_allowed_ips() {
+    local allowed="$OPT_ALLOWED_IPS"
+    # The old shipped default of this option was the tunnel range 10.8.0.0/24;
+    # if the tunnel was moved elsewhere, that saved value is stale, not a
+    # deliberate extra range.
+    if [ "$(trim "$allowed")" = "$SHIPPED_TUNNEL_CIDR" ] && [ "$TUNNEL_CIDR" != "$SHIPPED_TUNNEL_CIDR" ]; then
+        allowed=""
+    fi
+    merge_allowed_ips "$allowed"
 }
 
 # ---- enforce allowed IPs on the server -----------------------------------------
@@ -344,7 +351,8 @@ warn_if_lan_reachable() {
         log "  ${EXTRA_ALLOWED_IPS}"
         log "Every machine in those ranges (cameras, NAS, admin interfaces, ...)"
         log "is reachable by any connected client. To restrict clients to Home"
-        log "Assistant only, empty the 'allowed_ips' option."
+        log "Assistant only, remove them from \"Allowed IPs\" in the WG-Easy panel"
+        log "(Administration > Config) or empty the 'allowed_ips' option."
         log "****************************************************************"
     else
         log "allowed_ips: VPN clients reach this Home Assistant host only."
@@ -352,11 +360,35 @@ warn_if_lan_reachable() {
 }
 
 # ---- WG-Easy database: inspect, then apply what the add-on manages -------------
+# Apply rule: what is set in the WG-Easy panel survives restarts. An option
+# (allowed_ips, port, host, dns, mtu, persistent_keepalive) is written into the
+# panel only on the very first start and when its value has changed since the
+# last start; APPLIED_FILE remembers the values last written. An option that is
+# emptied leaves the panel as it is (except allowed_ips, where empty means
+# "Home Assistant only"). The LAN device is detected and set on every start.
 json_array_from_csv() {
     jq -cn --arg v "$1" '$v | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(. != ""))'
 }
+load_applied() {
+    if [ -s "$APPLIED_FILE" ] && jq -e 'type == "object"' "$APPLIED_FILE" >/dev/null 2>&1; then
+        APPLIED="$(cat "$APPLIED_FILE")"
+        HAVE_APPLIED=true
+    fi
+}
+applied() {
+    jq -r --arg k "$1" '.[$k] // empty | tostring' <<< "$APPLIED"
+}
+# option_changed <key> <current value>: must this option be written now?
+# An installation from before this rule (no APPLIED_FILE) wrote every option on
+# every start, so its database already holds them: nothing to re-apply.
+option_changed() {
+    [ "$SETUP_DONE" != "true" ] && return 0
+    [ "$HAVE_APPLIED" = "true" ] || return 1
+    [ "$(applied "$1")" != "$2" ]
+}
 prepare_database() {
-    local state apply
+    local state db_allowed panel_allowed old_ip new_list
+    local key_allowed key_dns writes='{}'
     if ! state="$(node "$ADDON/prepare-db.mjs" inspect)"; then
         log "ERROR: could not open or migrate the WG-Easy database (see above)."
         exit 1
@@ -364,6 +396,8 @@ prepare_database() {
     SETUP_DONE="$(jq -r '.setupDone' <<< "$state")"
     DB_IPV4_CIDR="$(jq -r '.ipv4Cidr // empty' <<< "$state")"
     DB_ADMIN="$(jq -r '.adminUsername // empty' <<< "$state")"
+    db_allowed="$(jq -c '.defaultAllowedIps // []' <<< "$state")"
+    load_applied
 
     if [ "$SETUP_DONE" = "true" ]; then
         TUNNEL_CIDR="${DB_IPV4_CIDR:-$SHIPPED_TUNNEL_CIDR}"
@@ -375,26 +409,56 @@ prepare_database() {
     else
         TUNNEL_CIDR="${OPT_IPV4_CIDR:-${DB_IPV4_CIDR:-$SHIPPED_TUNNEL_CIDR}}"
     fi
-    derive_allowed_ips
 
-    apply="$(jq -cn \
-        --arg device "$LAN_DEV" \
-        --argjson allowed "$(json_array_from_csv "$EFFECTIVE_ALLOWED_IPS")" \
-        --arg host "$OPT_HOST" \
-        --arg port "$OPT_PORT" \
-        --argjson dns "$(json_array_from_csv "$OPT_DNS")" \
-        --arg mtu "$OPT_MTU" \
-        --arg keepalive "$OPT_KEEPALIVE" \
-        '{
-            device: (if $device == "" then null else $device end),
-            defaultAllowedIps: $allowed,
-            host: (if $host == "" then null else $host end),
-            port: ($port | tonumber),
-            dns: (if ($dns | length) == 0 then null else $dns end),
-            mtu: (if $mtu == "" then null else ($mtu | tonumber) end),
-            keepalive: (if $keepalive == "" then null else ($keepalive | tonumber) end)
-        } | with_entries(select(.value != null))')"
-    if ! node "$ADDON/prepare-db.mjs" apply "$apply"; then
+    # Allowed IPs: the option when it changed, otherwise the panel's value.
+    key_allowed="$(json_array_from_csv "$OPT_ALLOWED_IPS")"
+    if option_changed allowed_ips "$key_allowed"; then
+        option_allowed_ips
+        writes="$(jq -c --argjson v "$(json_array_from_csv "$EFFECTIVE_ALLOWED_IPS")" '. + {defaultAllowedIps: $v}' <<< "$writes")"
+        [ "$SETUP_DONE" = "true" ] && log "allowed_ips option changed: written to the panel's Allowed IPs."
+    else
+        # Keep the panel's list; only follow a change of this host's address.
+        old_ip="$(applied host_ip)"
+        new_list="$db_allowed"
+        if [ -n "$old_ip" ] && [ -n "$HOST_LAN_IP" ] && [ "$old_ip" != "$HOST_LAN_IP" ]; then
+            new_list="$(jq -c --arg o "$old_ip/32" --arg n "$HOST_LAN_IP/32" 'map(if . == $o then $n else . end) | unique' <<< "$db_allowed")"
+            if [ "$new_list" != "$db_allowed" ]; then
+                writes="$(jq -c --argjson v "$new_list" '. + {defaultAllowedIps: $v}' <<< "$writes")"
+                log "Home Assistant address changed ($old_ip -> $HOST_LAN_IP): Allowed IPs updated."
+            fi
+        fi
+        panel_allowed="$(jq -r 'join(", ")' <<< "$new_list")"
+        merge_allowed_ips "$panel_allowed"
+        log "Allowed IPs: kept from the WG-Easy panel."
+    fi
+
+    if option_changed port "$OPT_PORT"; then
+        writes="$(jq -c --arg v "$OPT_PORT" '. + {port: ($v | tonumber)}' <<< "$writes")"
+    fi
+    if [ -n "$OPT_HOST" ] && option_changed host "$OPT_HOST"; then
+        writes="$(jq -c --arg v "$OPT_HOST" '. + {host: $v}' <<< "$writes")"
+    fi
+    key_dns="$(json_array_from_csv "$OPT_DNS")"
+    if [ -n "$OPT_DNS" ] && option_changed dns "$key_dns"; then
+        writes="$(jq -c --argjson v "$key_dns" '. + {dns: $v}' <<< "$writes")"
+    fi
+    if [ -n "$OPT_MTU" ] && option_changed mtu "$OPT_MTU"; then
+        writes="$(jq -c --arg v "$OPT_MTU" '. + {mtu: ($v | tonumber)}' <<< "$writes")"
+    fi
+    if [ -n "$OPT_KEEPALIVE" ] && option_changed persistent_keepalive "$OPT_KEEPALIVE"; then
+        writes="$(jq -c --arg v "$OPT_KEEPALIVE" '. + {keepalive: ($v | tonumber)}' <<< "$writes")"
+    fi
+    [ -n "$LAN_DEV" ] && writes="$(jq -c --arg v "$LAN_DEV" '. + {device: $v}' <<< "$writes")"
+
+    if node "$ADDON/prepare-db.mjs" apply "$writes"; then
+        jq -n \
+            --argjson allowed "$key_allowed" --arg port "$OPT_PORT" --arg host "$OPT_HOST" \
+            --argjson dns "$key_dns" --arg mtu "$OPT_MTU" --arg keepalive "$OPT_KEEPALIVE" \
+            --arg host_ip "${HOST_LAN_IP:-$(applied host_ip)}" \
+            '{allowed_ips: ($allowed | tojson), port: $port, host: $host, dns: ($dns | tojson),
+              mtu: $mtu, persistent_keepalive: $keepalive, host_ip: $host_ip}' \
+            > "$APPLIED_FILE.tmp" && mv "$APPLIED_FILE.tmp" "$APPLIED_FILE"
+    else
         log "WARNING: could not apply the add-on settings to the WG-Easy database;"
         log "WG-Easy starts with its stored settings."
     fi

@@ -1,5 +1,5 @@
 name: "WG-Easy VPN"
-version: "1.0.1"
+version: "1.0.2"
 slug: "wg-easy"
 description: >-
   WireGuard VPN server with the WG-Easy web interface, as a Home Assistant
@@ -50,15 +50,17 @@ privileged:
 
 # Nothing is required: the add-on works as installed. Everything else
 # (DNS, MTU, keepalive, hooks, CIDRs, users, 2FA, metrics, ...) is set in the
-# WG-Easy panel, exactly as with a standalone WG-Easy. The optional settings
-# below override the panel on every start when they are filled in.
+# WG-Easy panel, exactly as with a standalone WG-Easy. An option is written
+# into the panel on the first start and when it is changed; otherwise what was
+# set in the panel is kept across restarts (see run.sh, "Apply rule").
 options:
   host: ""
   port: 51820
-  # What VPN clients may reach beyond the tunnel and this Home Assistant host,
-  # enforced on the server for ALL clients (FORWARD filter) and used as the
-  # default AllowedIPs of NEW clients. Empty = Home Assistant only. Add your
-  # LAN subnet (e.g. "192.168.0.0/24") to let clients reach the whole LAN.
+  # What VPN clients may reach beyond the tunnel and this Home Assistant host.
+  # When changed, written into the panel's Allowed IPs, which are enforced on
+  # the server for ALL clients (FORWARD filter) and are the default AllowedIPs
+  # of NEW clients. Empty = Home Assistant only. Add your LAN subnet (e.g.
+  # "192.168.0.0/24") to let clients reach the whole LAN.
   allowed_ips: ""
   disable_ipv6: true
   home_assistant_entities: true

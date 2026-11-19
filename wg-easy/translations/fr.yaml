@@ -4,20 +4,23 @@ configuration:
     description: >-
       Adresse IP publique ou nom DNS auquel les clients VPN se connectent.
       Laisser vide pour utiliser l'adresse détectée au premier démarrage
-      (modifiable dans le panneau WG-Easy). Si elle est renseignée, elle
-      remplace la valeur du panneau à chaque démarrage.
+      (modifiable dans le panneau WG-Easy). Si elle est renseignée ou
+      modifiée, elle remplace la valeur du panneau au démarrage suivant.
   port:
     name: "Port WireGuard (UDP)"
     description: >-
       Port UDP sur lequel WireGuard écoute. Redirigez ce port vers Home
-      Assistant sur votre box.
+      Assistant sur votre box. Écrit dans le panneau quand il est modifié ;
+      un port changé dans le panneau est conservé.
   allowed_ips:
     name: "Réseaux autorisés"
     description: >-
       Plages supplémentaires accessibles aux clients VPN, séparées par des
       virgules (par exemple votre réseau local 192.168.1.0/24). Vide signifie
-      Home Assistant uniquement. Appliqué côté serveur pour tous les clients, et
-      utilisé comme routage des nouveaux clients.
+      Home Assistant uniquement. Écrit dans les Allowed IPs du panneau quand il
+      est modifié ; la liste du panneau est conservée aux redémarrages,
+      appliquée côté serveur pour tous les clients et utilisée comme routage
+      des nouveaux clients.
   disable_ipv6:
     name: "Désactiver l'IPv6"
     description: >-
